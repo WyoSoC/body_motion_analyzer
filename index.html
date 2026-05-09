@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Body Motion Analyzer</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="header-left">
+        <h1 class="app-title">Kinesiology Body Motion Analyzer</h1>
+        <span class="app-subtitle">MediaPipe Markerless Motion Analysis (<a href="https://www.uwyo.edu/kandh/labs/perception-action-cerebral-executive-lab.html" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;text-underline-offset:2px">PACE Lab, University of Wyoming</a>)</span>
+      </div>
+      <div class="header-right">
+        <div id="status-bar" class="status-bar">
+          <span id="mp-status" class="status-chip status-loading">MediaPipe: Loading…</span>
+          <span id="cam-status" class="status-chip status-idle">Camera: Idle</span>
+          <span id="voice-status" class="status-chip status-idle">Voice: Off</span>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="calibration">
+        <span class="tab-num">1</span>
+        <span class="tab-label">Calibration</span>
+      </button>
+      <button class="tab-btn" data-tab="collection">
+        <span class="tab-num">2</span>
+        <span class="tab-label">Data Collection</span>
+      </button>
+      <button class="tab-btn" data-tab="analysis">
+        <span class="tab-num">3</span>
+        <span class="tab-label">Analysis</span>
+      </button>
+    </nav>
+
+    <main class="tab-container">
+      <section id="tab-calibration" class="tab-content active"></section>
+      <section id="tab-collection" class="tab-content"></section>
+      <section id="tab-analysis" class="tab-content"></section>
+    </main>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-box" class="modal-box"></div>
+  </div>
+
+  <footer style="
+    position:fixed;bottom:0;right:0;
+    padding:5px 14px;
+    font-size:10.5px;color:var(--text-muted);
+    background:var(--surface);border-top:1px solid var(--border);
+    border-left:1px solid var(--border);border-radius:8px 0 0 0;
+    line-height:1.5;z-index:50">
+    Developed by
+    <a href="https://www.uwyo.edu/soc/people/faculty/jian-gong.html"
+       target="_blank" rel="noopener"
+       style="color:inherit;text-decoration:underline;text-underline-offset:2px">Dr. Jian Gong</a>
+    · School of Computing, University of Wyoming
+  </footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
