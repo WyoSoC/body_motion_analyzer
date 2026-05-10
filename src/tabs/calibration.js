@@ -537,44 +537,21 @@ function setDetectStatus(container, state, msg) {
 }
 
 function drawCornersOverlay(cornersData, cols, rows, color = '#3ecf70') {
-  // Scale corners from video coords to canvas display coords
+  // cornersData is a flat [x,y,x,y,…] array of detected square centres
   const scaleX = overlayCanvas.width  / videoEl.videoWidth
   const scaleY = overlayCanvas.height / videoEl.videoHeight
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
 
-  for (let i = 0; i < cols * rows; i++) {
+  const n = cornersData.length / 2
+  for (let i = 0; i < n; i++) {
     const cx = cornersData[i * 2]     * scaleX
     const cy = cornersData[i * 2 + 1] * scaleY
     ctx.beginPath()
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2)
-    ctx.fillStyle   = color
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2)
+    ctx.fillStyle   = color + 'bb'
     ctx.strokeStyle = '#000'
-    ctx.lineWidth   = 1
+    ctx.lineWidth   = 1.5
     ctx.fill(); ctx.stroke()
-  }
-
-  // Draw connecting lines between adjacent corners
-  ctx.strokeStyle = color + 'aa'
-  ctx.lineWidth   = 1.5
-  for (let r = 0; r < rows; r++) {
-    ctx.beginPath()
-    for (let c = 0; c < cols; c++) {
-      const i  = r * cols + c
-      const cx = cornersData[i * 2]     * scaleX
-      const cy = cornersData[i * 2 + 1] * scaleY
-      c === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy)
-    }
-    ctx.stroke()
-  }
-  for (let c = 0; c < cols; c++) {
-    ctx.beginPath()
-    for (let r = 0; r < rows; r++) {
-      const i  = r * cols + c
-      const cx = cornersData[i * 2]     * scaleX
-      const cy = cornersData[i * 2 + 1] * scaleY
-      r === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy)
-    }
-    ctx.stroke()
   }
 }
 
