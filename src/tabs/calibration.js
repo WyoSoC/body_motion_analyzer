@@ -12,6 +12,7 @@ let calibrations = []
 let calMethod    = 'ruler'        // 'ruler' | 'checkerboard'
 let clickPoints  = []             // ruler: [{x,y}] canvas coords
 let _lastPxPerMm = null
+let isFlipped    = false
 
 // Checkerboard auto-detect
 let detecting    = false
@@ -46,6 +47,7 @@ function buildUI() {
         <video id="cal-video" muted playsinline></video>
         <canvas id="cal-overlay"></canvas>
         <span class="camera-label" id="cal-cam-label">No camera</span>
+        <button class="flip-btn" id="cal-flip-btn" title="Mirror the camera view">⇔ Mirror</button>
       </div>
       <div class="btn-group mt-8">
         <button class="btn btn-ghost btn-sm" id="cal-start-cam">▶ Start Camera</button>
@@ -85,7 +87,7 @@ function buildUI() {
         <div class="form-row-inline">
           <div style="flex:2">
             <label>Known distance between the 2 clicked points</label>
-            <input type="number" id="cal-ruler-dist" value="100" min="0.1" step="0.1" />
+            <input type="number" id="cal-ruler-dist" value="500" min="0.1" step="0.1" />
           </div>
           <div style="flex:1">
             <label>Unit</label>
@@ -179,6 +181,7 @@ function bindEvents(container) {
   container.querySelector('#cal-clear-pts').addEventListener('click', () => clearState(container))
   container.querySelector('#cal-calc-btn').addEventListener('click',  () => calculate(container))
   container.querySelector('#cal-save-btn').addEventListener('click',  () => saveCal(container))
+  container.querySelector('#cal-flip-btn').addEventListener('click',  () => toggleFlip(container))
 
   // Method toggle
   container.querySelectorAll('[data-method]').forEach(btn => {
@@ -193,6 +196,17 @@ function bindEvents(container) {
   // Checkerboard auto-detect
   container.querySelector('#cal-detect-btn').addEventListener('click', () => startDetection(container))
   container.querySelector('#cal-stop-detect-btn').addEventListener('click', () => stopDetection(container))
+}
+
+// ── Flip ──────────────────────────────────────────────────────
+
+function toggleFlip(container) {
+  isFlipped = !isFlipped
+  const t = isFlipped ? 'scaleX(-1)' : ''
+  container.querySelector('#cal-video').style.transform   = t
+  container.querySelector('#cal-overlay').style.transform = t
+  container.querySelector('#cal-flip-btn').classList.toggle('active', isFlipped)
+  clearState(container)  // ruler points are no longer valid after a flip
 }
 
 // ── Method switch ─────────────────────────────────────────────
@@ -228,14 +242,19 @@ function switchMethod(container, method) {
     setInstructions(container, `
       <ol style="padding-left:16px;line-height:2;font-size:13px;color:var(--text-muted)">
         <li>Start the camera.</li>
-        <li>Print the calibration checkerboard (use <em>checkerboard-calibration.pdf</em>).</li>
+        <li>Print the calibration checkerboard —
+          <a href="./checkerboard-calibration.pdf" download
+             style="color:var(--accent);text-underline-offset:2px">
+            ⬇ Download checkerboard-calibration.pdf
+          </a>
+        </li>
         <li>Set Inner Cols, Inner Rows and Square Size to match your printout.</li>
         <li>Hold the board flat, facing the camera.</li>
         <li>Click <strong>Start Detection</strong> — OpenCV will find the corners automatically.</li>
         <li>When corners are detected the overlay turns green. Click <strong>Capture</strong> to save the scale.</li>
       </ol>
       <p style="font-size:11px;color:var(--text-muted);margin-top:8px">
-        ⚠ OpenCV.js (~7 MB) is downloaded on first use and cached by the browser.
+        ⚠ OpenCV.js (~8 MB) is downloaded on first use (up to 15 s) and cached by the browser.
       </p>`)
   }
 }
@@ -295,8 +314,9 @@ function handleCanvasClick(e, container) {
   const rect  = overlayCanvas.getBoundingClientRect()
   const scaleX = overlayCanvas.width  / rect.width
   const scaleY = overlayCanvas.height / rect.height
-  const x = (e.clientX - rect.left) * scaleX
+  let x = (e.clientX - rect.left) * scaleX
   const y = (e.clientY - rect.top)  * scaleY
+  if (isFlipped) x = overlayCanvas.width - x
 
   if (clickPoints.length >= 2) clickPoints = []
   clickPoints.push({ x, y })
@@ -373,18 +393,37 @@ function showResult(container, html) {
 
 // ── OpenCV lazy load ──────────────────────────────────────────
 
+const OPENCV_URL = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js'
+const OPENCV_TIMEOUT_MS = 15_000
+
 function loadOpenCV(onProgress) {
   if (_cvPromise) return _cvPromise
   _cvPromise = new Promise((resolve, reject) => {
     if (window.cv?.Mat) { resolve(window.cv); return }
-    onProgress?.('Downloading OpenCV.js (~7 MB)…')
-    // Must set Module before the script initialises
+    onProgress?.('Downloading OpenCV.js (~8 MB) — first load may take 10–20 s…')
+
+    let settled = false
+    const done = (err, val) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timerId)
+      if (err) { _cvPromise = null; reject(err) }
+      else resolve(val)
+    }
+
+    const timerId = setTimeout(() => {
+      script.remove()
+      done(new Error('Download timed out after 15 s. Check your internet connection and try again.'))
+    }, OPENCV_TIMEOUT_MS)
+
+    // window.Module must be set before the script tag is appended
     window.Module = window.Module ?? {}
-    window.Module.onRuntimeInitialized = () => resolve(window.cv)
+    window.Module.onRuntimeInitialized = () => done(null, window.cv)
+
     const script = document.createElement('script')
-    script.src   = 'https://docs.opencv.org/4.8.0/opencv.js'
+    script.src   = OPENCV_URL
     script.async = true
-    script.onerror = () => { _cvPromise = null; reject(new Error('Failed to load OpenCV.js')) }
+    script.onerror = () => { script.remove(); done(new Error('Could not download OpenCV.js. Check your internet connection.')) }
     document.head.appendChild(script)
   })
   return _cvPromise
@@ -396,7 +435,7 @@ async function startDetection(container) {
   if (!videoEl.srcObject) { alert('Start the camera first.'); return }
 
   const statusEl = container.querySelector('#cal-detect-status')
-  setDetectStatus(container, 'loading', 'Loading OpenCV.js…')
+  setDetectStatus(container, 'loading', 'Loading OpenCV.js (15 s timeout)…')
   container.querySelector('#cal-detect-btn').disabled      = true
   container.querySelector('#cal-stop-detect-btn').disabled = false
 
@@ -404,8 +443,9 @@ async function startDetection(container) {
   try {
     cv = await loadOpenCV((msg) => setDetectStatus(container, 'loading', msg))
   } catch (err) {
-    setDetectStatus(container, 'error', `Failed to load OpenCV: ${err.message}`)
-    container.querySelector('#cal-detect-btn').disabled = false
+    setDetectStatus(container, 'error', err.message)
+    container.querySelector('#cal-detect-btn').disabled      = false
+    container.querySelector('#cal-stop-detect-btn').disabled = true
     return
   }
 
