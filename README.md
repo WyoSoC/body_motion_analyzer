@@ -11,7 +11,7 @@ A fully browser-based body motion capture and analysis tool — no server, no in
 ### Calibration
 Set a pixel-to-millimeter scale factor for real-world measurements using either:
 - **Ruler method** — click two points on the camera preview and enter the known distance
-- **Checkerboard (auto)** — print `checkerboard-calibration.pdf`, hold it in front of the camera, and let OpenCV.js detect the corners automatically
+- **Checkerboard (auto)** — print `checkerboard-calibration.pdf`, hold it in front of the camera, and let OpenCV.js detect grids automatically
 
 ### Collection
 Record motion trials with live camera and MediaPipe AI landmark overlay:
@@ -66,7 +66,7 @@ npm run build
 
 ## Calibration Checkerboard
 
-The files `checkerboard-calibration.pdf` and `checkerboard-print.html` contain a printable 9×6 inner-corner checkerboard with 20 mm squares. Print at 100% scale (no fit-to-page), measure a few squares with a ruler to verify accuracy, then use the **Checkerboard (auto)** calibration method in the app.
+The file `checkerboard-calibration.pdf` contain a printable 9×6 inner-corner checkerboard with 20 mm squares. Print at 100% scale (no fit-to-page), measure a few squares with a ruler to verify accuracy, then use the **Checkerboard (auto)** calibration method in the app.
 
 ---
 
@@ -78,4 +78,4 @@ This repo uses a GitHub Actions workflow (`.github/workflows/deploy.yml`) that a
 
 ## License
 
-MIT © Jian Gong
+MIT © Dr. Jian Gong
