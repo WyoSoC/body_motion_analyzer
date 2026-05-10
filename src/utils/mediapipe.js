@@ -5,8 +5,8 @@ import {
   DrawingUtils
 } from '@mediapipe/tasks-vision'
 
-// Absolute path — served from public/wasm/, version-matched to installed package.
-const WASM_PATH = '/wasm'
+// Relative to the app's base URL so it works on GitHub Pages subdirectories.
+const WASM_PATH = `${import.meta.env.BASE_URL}wasm`
 const MODELS = {
   pose:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
   hands: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
