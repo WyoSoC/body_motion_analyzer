@@ -254,7 +254,7 @@ function switchMethod(container, method) {
         <li>When corners are detected the overlay turns green. Click <strong>Capture</strong> to save the scale.</li>
       </ol>
       <p style="font-size:11px;color:var(--text-muted);margin-top:8px">
-        ⚠ OpenCV.js (~8 MB) is downloaded on first use (up to 15 s) and cached by the browser.
+        ⚠ OpenCV.js (~8 MB) is downloaded on first use (up to 30 s) and cached by the browser.
       </p>`)
   }
 }
@@ -394,13 +394,13 @@ function showResult(container, html) {
 // ── OpenCV lazy load ──────────────────────────────────────────
 
 const OPENCV_URL = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js'
-const OPENCV_TIMEOUT_MS = 15_000
+const OPENCV_TIMEOUT_MS = 30_000
 
 function loadOpenCV(onProgress) {
   if (_cvPromise) return _cvPromise
   _cvPromise = new Promise((resolve, reject) => {
     if (window.cv?.Mat) { resolve(window.cv); return }
-    onProgress?.('Downloading OpenCV.js (~8 MB) — first load may take 10–20 s…')
+    onProgress?.('Downloading OpenCV.js (~8 MB) — first load may take up to 30 s…')
 
     let settled = false
     const done = (err, val) => {
@@ -413,7 +413,7 @@ function loadOpenCV(onProgress) {
 
     const timerId = setTimeout(() => {
       script.remove()
-      done(new Error('Download timed out after 15 s. Check your internet connection and try again.'))
+      done(new Error('OpenCV.js failed to initialize within 30 s. Please reload and try again.'))
     }, OPENCV_TIMEOUT_MS)
 
     // window.Module must be set before the script tag is appended
@@ -423,7 +423,7 @@ function loadOpenCV(onProgress) {
     const script = document.createElement('script')
     script.src   = OPENCV_URL
     script.async = true
-    script.onerror = () => { script.remove(); done(new Error('Could not download OpenCV.js. Check your internet connection.')) }
+    script.onerror = () => { script.remove(); done(new Error('OpenCV.js failed to load. Please reload and try again.')) }
     document.head.appendChild(script)
   })
   return _cvPromise
@@ -435,7 +435,7 @@ async function startDetection(container) {
   if (!videoEl.srcObject) { alert('Start the camera first.'); return }
 
   const statusEl = container.querySelector('#cal-detect-status')
-  setDetectStatus(container, 'loading', 'Loading OpenCV.js (15 s timeout)…')
+  setDetectStatus(container, 'loading', 'Loading OpenCV.js (30 s timeout)…')
   container.querySelector('#cal-detect-btn').disabled      = true
   container.querySelector('#cal-stop-detect-btn').disabled = false
 
