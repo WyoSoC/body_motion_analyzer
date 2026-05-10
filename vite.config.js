@@ -15,5 +15,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['@mediapipe/tasks-vision']
+  },
+  server: {
+    sourcemapIgnoreList: (path) => path.includes('node_modules'),
   }
 })

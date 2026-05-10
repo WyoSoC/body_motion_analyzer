@@ -2,7 +2,7 @@ import Chart from 'chart.js/auto'
 import { getAllSessions, getTrialsBySession, getTrial, getCalibration, downloadBlob, exportTrialCSV } from '../db.js'
 import { getGroups, getLandmarkNames } from '../utils/landmarks.js'
 import {
-  extractLandmarkTimeSeries,
+  extractLandmarkTimeSeries, extractGroupTimeSeries,
   computeSpeed, computeAcceleration, computeJerk,
   computeNormalizedJerk, computeSampleEntropy, computeROM,
   summarize, METRIC_DEFS
