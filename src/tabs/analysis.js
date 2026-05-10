@@ -668,45 +668,124 @@ function downloadStatsCsv(landmarkSeries, unit) {
   downloadBlob(new Blob([csv], { type: 'text/csv' }), `${trialName}_stats.csv`)
 }
 
-// ── Group analysis ─────────────────────────────────────────────
+// ── Group analysis (Compare Trials) ───────────────────────────
 
 async function runGroupAnalysis(container) {
   const sel = container.querySelector('#an-multi-trial-sel')
   const selectedIds = [...sel.selectedOptions].map(o => parseInt(o.value))
   if (selectedIds.length < 2) { alert('Select at least 2 trials to compare.'); return }
+  if (!customIndices.size) {
+    alert('Select a Landmark Group or Custom Landmarks on the right panel first.')
+    return
+  }
 
-  const trials = await Promise.all(selectedIds.map(id => getTrial(id)))
-  const model  = trials[0]?.model ?? 'pose'
-  const groups = getGroups(model)
-  const gName  = activeGroup ?? Object.keys(groups)[0]
-  const indices = groups[gName]?.indices ?? [0]
+  const trials  = await Promise.all(selectedIds.map(id => getTrial(id)))
+  const indices = [...customIndices].sort((a, b) => a - b)
 
-  const speedStats = trials.map(trial => {
-    const series = extractGroupTimeSeries(trial.landmarkData ?? [], indices, null)
-    const speed  = computeSpeed(series)
-    return { name: trial.name, ...summarize(speed.values) }
-  })
+  // Label describing the current landmark selection
+  const selectionLabel = activeGroup
+    ? `${activeGroup} — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
+    : `Custom selection — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
+
+  // Compute centroid time series per trial (no calibration — trials may differ)
+  const trialColors = trials.map((_, i) => getColor(i))
+  const trialSeries = trials.map((trial, i) => ({
+    name:   trial.name,
+    color:  trialColors[i],
+    series: extractGroupTimeSeries(trial.landmarkData ?? [], indices, null),
+  }))
 
   const area = container.querySelector('#an-group-chart-area')
   area.innerHTML = ''
 
-  // Header bar with clear button
+  // Header
   const header = document.createElement('div')
-  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:12px 0 4px'
+  header.style.cssText = 'margin:12px 0 10px'
   header.innerHTML = `
-    <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">
-      Group Results — ${gName}
-    </span>
-    <button class="btn btn-ghost btn-sm" id="an-clear-group">← Back to Individual</button>`
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">
+          Trial Comparison
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">
+          Landmark: <em style="color:var(--text)">${selectionLabel}</em>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="an-clear-group">← Back</button>
+    </div>`
   area.appendChild(header)
+  header.querySelector('#an-clear-group').addEventListener('click', () => { area.innerHTML = '' })
 
-  header.querySelector('#an-clear-group').addEventListener('click', () => {
-    area.innerHTML = ''
-    container.querySelector('#an-charts-area').scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // One chart per active metric
+  for (const mDef of METRIC_DEFS) {
+    if (!activeMetrics.has(mDef.key)) continue
+    if (mDef.key === 'normjerk' || mDef.key === 'sampentropy' || mDef.key === 'rom') {
+      renderGroupScalarChart(area, trialSeries, mDef)
+    } else {
+      renderGroupLineChart(area, trialSeries, mDef)
+    }
+  }
+
+  // Summary stats table
+  renderGroupStatsTable(area, trialSeries)
+}
+
+// Overlaid time-series line chart — one line per trial
+function renderGroupLineChart(area, trialSeries, mDef) {
+  const datasets = trialSeries.map(({ name, color, series }) => {
+    let result = { times: [], values: [] }
+    if (mDef.key === 'speed') result = computeSpeed(series)
+    else if (mDef.key === 'accel') result = computeAcceleration(series)
+    else if (mDef.key === 'jerk')  result = computeJerk(series)
+    if (!result.values.length) return null
+    return {
+      label: name,
+      data: result.times.map((t, j) => ({ x: t, y: result.values[j] })),
+      borderColor: color,
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+    }
+  }).filter(Boolean)
+
+  if (!datasets.length) return
+
+  const wrap = document.createElement('div')
+  wrap.className = 'chart-wrap mt-8'
+  const canvas = document.createElement('canvas')
+  wrap.appendChild(canvas)
+  area.appendChild(wrap)
+
+  new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, animation: false, parsing: false,
+      plugins: {
+        legend: { labels: { color: '#e2e8f0', font: { size: 11 }, boxWidth: 12 } },
+        title: { display: true, text: `${mDef.label} (norm${mDef.unit}) — centroid`, color: '#e2e8f0', font: { size: 12 } },
+      },
+      scales: {
+        x: { type: 'linear', ticks: { color: '#8892a4', maxTicksLimit: 10 }, grid: { color: '#2e3248' },
+             title: { display: true, text: 'Time (s)', color: '#8892a4' } },
+        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
+      },
+    },
+  })
+}
+
+// Bar chart for scalar metrics (normjerk, sampentropy, rom)
+function renderGroupScalarChart(area, trialSeries, mDef) {
+  const values = trialSeries.map(({ series }) => {
+    if (mDef.key === 'normjerk')    return computeNormalizedJerk(series) ?? 0
+    if (mDef.key === 'sampentropy') return computeSampleEntropy(computeSpeed(series).values) ?? 0
+    if (mDef.key === 'rom')         return computeROM(series).resultant ?? 0
+    return 0
   })
 
   const wrap = document.createElement('div')
-  wrap.className = 'chart-wrap mt-12'
+  wrap.className = 'chart-wrap mt-8'
   const canvas = document.createElement('canvas')
   wrap.appendChild(canvas)
   area.appendChild(wrap)
@@ -714,55 +793,66 @@ async function runGroupAnalysis(container) {
   new Chart(canvas, {
     type: 'bar',
     data: {
-      labels: speedStats.map(s => s.name),
-      datasets: [
-        {
-          label: 'Mean Speed',
-          data: speedStats.map(s => s.mean ?? 0),
-          backgroundColor: '#5b7fff88',
-          borderColor: '#5b7fff',
-          borderWidth: 1,
-        },
-        {
-          label: 'Peak Speed',
-          data: speedStats.map(s => s.max ?? 0),
-          backgroundColor: '#3ecf7088',
-          borderColor: '#3ecf70',
-          borderWidth: 1,
-        }
-      ]
+      labels: trialSeries.map(t => t.name),
+      datasets: [{
+        label: mDef.label,
+        data: values,
+        backgroundColor: trialSeries.map(t => t.color + '88'),
+        borderColor:     trialSeries.map(t => t.color),
+        borderWidth: 1,
+      }],
     },
     options: {
-      responsive: true,
-      animation: false,
+      responsive: true, animation: false,
       plugins: {
         legend: { labels: { color: '#e2e8f0' } },
-        title: { display: true, text: `Speed Comparison – ${gName}`, color: '#e2e8f0' }
+        title: { display: true, text: `${mDef.label} — centroid`, color: '#e2e8f0', font: { size: 12 } },
       },
       scales: {
         x: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
-        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } }
-      }
-    }
+        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
+      },
+    },
   })
+}
 
-  // Summary table
-  const tableWrap = document.createElement('div')
-  tableWrap.innerHTML = `
-    <table class="stats-table mt-8">
-      <thead><tr><th>Trial</th><th>Mean Speed</th><th>Peak Speed</th><th>CV%</th><th>ROM</th></tr></thead>
-      <tbody>
-        ${speedStats.map(s => `
-          <tr>
-            <td>${s.name}</td>
-            <td>${s.mean?.toFixed(3) ?? '—'}</td>
-            <td>${s.max?.toFixed(3)  ?? '—'}</td>
-            <td>${((s.cv ?? 0) * 100).toFixed(1)}%</td>
-            <td>—</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`
-  area.appendChild(tableWrap)
+// Summary stats table across all trials
+function renderGroupStatsTable(area, trialSeries) {
+  const rows = trialSeries.map(({ name, color, series }) => {
+    const speed = computeSpeed(series)
+    const s   = summarize(speed.values)
+    const rom = computeROM(series)
+    const nj  = computeNormalizedJerk(series)
+    const se  = computeSampleEntropy(speed.values)
+    return `<tr>
+      <td style="color:${color};white-space:nowrap">${name}</td>
+      <td>${s.mean?.toFixed(3) ?? '—'}</td>
+      <td>${s.max?.toFixed(3)  ?? '—'}</td>
+      <td>${s.std?.toFixed(3)  ?? '—'}</td>
+      <td>${((s.cv ?? 0) * 100).toFixed(1)}%</td>
+      <td>${rom.resultant?.toFixed(3) ?? '—'}</td>
+      <td>${nj != null ? nj.toFixed(3) : '—'}</td>
+      <td>${se != null ? se.toFixed(3) : '—'}</td>
+    </tr>`
+  }).join('')
+
+  const wrap = document.createElement('div')
+  wrap.className = 'mt-8'
+  wrap.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="stats-table">
+        <thead><tr>
+          <th>Trial</th>
+          <th>Mean Spd</th><th>Peak Spd</th><th>Std Dev</th><th>CV%</th>
+          <th>ROM res.</th><th>Norm. Jerk</th><th>Samp. Entropy</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
+      Values in normalized coordinates · centroid of selected landmarks
+    </div>`
+  area.appendChild(wrap)
 }
 
 // ── Export ────────────────────────────────────────────────────
