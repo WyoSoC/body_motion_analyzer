@@ -2,7 +2,7 @@ import Chart from 'chart.js/auto'
 import { getAllSessions, getTrialsBySession, getTrial, getCalibration, downloadBlob, exportTrialCSV } from '../db.js'
 import { getGroups, getLandmarkNames } from '../utils/landmarks.js'
 import {
-  extractLandmarkTimeSeries, extractGroupTimeSeries,
+  extractLandmarkTimeSeries,
   computeSpeed, computeAcceleration, computeJerk,
   computeNormalizedJerk, computeSampleEntropy, computeROM,
   summarize, METRIC_DEFS
@@ -13,13 +13,27 @@ let allSessions = []
 let currentTrial = null
 let currentCalibration = null
 
-let activeMetrics   = new Set(['speed'])
-let activeLandmarks = null   // null = predefined group; Set of indices for custom
-let activeGroup     = null
-let customIndices   = new Set()
+let activeMetrics = new Set(['speed'])
+let activeGroup   = null          // name of highlighted group chip, or null
+let customIndices = new Set()     // always the source of truth for which landmarks to plot
 
 let charts = {}
 let playbackRAF = null
+
+// 33-color palette (golden-angle HSL beyond the list)
+const COLOR_PALETTE = [
+  '#5b7fff','#3ecf70','#f59e0b','#ef4444','#8b5cf6','#06b6d4',
+  '#f43f5e','#10b981','#fbbf24','#a78bfa','#34d399','#60a5fa',
+  '#fb923c','#e879f9','#4ade80','#38bdf8','#facc15','#c084fc',
+  '#94a3b8','#84cc16','#0ea5e9','#d946ef','#22d3ee','#f97316',
+  '#a3e635','#e11d48','#2dd4bf','#7c3aed','#ca8a04','#15803d',
+  '#1d4ed8','#9f1239','#065f46',
+]
+function getColor(i) {
+  return i < COLOR_PALETTE.length
+    ? COLOR_PALETTE[i]
+    : `hsl(${(i * 137.5) % 360},75%,60%)`
+}
 
 export async function initAnalysis(container) {
   container.innerHTML = buildUI()
@@ -166,12 +180,13 @@ function bindEvents(container) {
 
   container.querySelector('#an-use-custom').addEventListener('click', () => {
     activeGroup = null
-    // unmark all group chips
     container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
     renderAnalysis(container)
   })
   container.querySelector('#an-clear-custom').addEventListener('click', () => {
     customIndices.clear()
+    activeGroup = null
+    container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
     container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => cb.checked = false)
     renderAnalysis(container)
   })
@@ -196,6 +211,14 @@ async function loadTrial(container) {
 
   setupGroupToggles(container, model)
   setupLandmarkCheckboxes(container, model)
+
+  // Sync the initial group's indices into customIndices and check the boxes
+  const initialIndices = new Set(getGroups(model)[activeGroup]?.indices ?? [])
+  customIndices = new Set(initialIndices)
+  container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => {
+    cb.checked = initialIndices.has(parseInt(cb.dataset.idx))
+  })
+
   setupVideoPlayback(container)
   renderAnalysis(container)
   container.querySelector('#an-video-card').style.display = 'block'
@@ -217,8 +240,14 @@ function setupGroupToggles(container, model) {
       el.querySelectorAll('.toggle-chip').forEach(b => b.classList.remove('active'))
       btn.classList.add('active')
       activeGroup = btn.dataset.group
-      customIndices.clear()
-      container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => cb.checked = false)
+
+      // Populate customIndices from the group and sync checkboxes
+      const groupIndices = new Set(groups[activeGroup]?.indices ?? [])
+      customIndices = new Set(groupIndices)
+      container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => {
+        cb.checked = groupIndices.has(parseInt(cb.dataset.idx))
+      })
+
       renderAnalysis(container)
     })
   })
@@ -237,6 +266,10 @@ function setupLandmarkCheckboxes(container, model) {
       const idx = parseInt(cb.dataset.idx)
       if (cb.checked) customIndices.add(idx)
       else customIndices.delete(idx)
+      // Deactivate group chip — user is now in custom mode
+      activeGroup = null
+      container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
+      renderAnalysis(container)
     })
   })
 }
@@ -289,35 +322,34 @@ function findClosestFrame(landmarkData, ms) {
 
 // ── Analysis rendering ────────────────────────────────────────
 
-function getActiveSeries() {
-  if (!currentTrial?.landmarkData?.length) return null
-  const model  = currentTrial.model ?? 'pose'
+function getActiveLandmarkSeries() {
+  if (!currentTrial?.landmarkData?.length || !customIndices.size) return null
+  const model   = currentTrial.model ?? 'pose'
   const pxPerMm = currentCalibration?.pxPerMm ?? null
+  const names   = getLandmarkNames(model)
 
-  const indices = activeGroup !== null
-    ? (getGroups(model)[activeGroup]?.indices ?? [0])
-    : [...customIndices]
-
-  if (!indices.length) return null
-
-  return indices.length === 1
-    ? extractLandmarkTimeSeries(currentTrial.landmarkData, indices[0], pxPerMm)
-    : extractGroupTimeSeries(currentTrial.landmarkData, indices, pxPerMm)
+  return [...customIndices]
+    .sort((a, b) => a - b)
+    .map(idx => ({
+      idx,
+      name: `${idx}: ${(names[idx] ?? `lm_${idx}`).replace(/_/g, ' ')}`,
+      series: extractLandmarkTimeSeries(currentTrial.landmarkData, idx, pxPerMm),
+    }))
+    .filter(item => item.series.length >= 2)
 }
 
 function renderAnalysis(container) {
   if (!currentTrial) return
-  const series = getActiveSeries()
-  if (!series || series.length < 3) {
+  const landmarkSeries = getActiveLandmarkSeries()
+
+  if (!landmarkSeries?.length) {
     container.querySelector('#an-charts-area').innerHTML =
-      '<div class="empty-state">Not enough data for the selected landmark group.</div>'
+      '<div class="empty-state">Select at least one landmark to display.</div>'
     return
   }
 
   const chartsArea = container.querySelector('#an-charts-area')
   chartsArea.innerHTML = ''
-
-  // Destroy old charts
   Object.values(charts).forEach(c => c.destroy())
   charts = {}
 
@@ -325,122 +357,170 @@ function renderAnalysis(container) {
 
   for (const mDef of METRIC_DEFS) {
     if (!activeMetrics.has(mDef.key)) continue
-    renderMetricChart(chartsArea, series, mDef, unit)
+    renderMetricChart(chartsArea, landmarkSeries, mDef, unit)
   }
 
-  renderStats(container, series, unit)
+  renderStats(container, landmarkSeries, unit)
 }
 
-function renderMetricChart(container, series, mDef, unit) {
-  let times = [], values = []
+// Dispatch to line chart or scalar table based on metric type
+function renderMetricChart(area, landmarkSeries, mDef, unit) {
+  if (mDef.key === 'normjerk' || mDef.key === 'sampentropy' || mDef.key === 'rom') {
+    renderScalarTable(area, landmarkSeries, mDef, unit)
+  } else {
+    renderLineChart(area, landmarkSeries, mDef, unit)
+  }
+}
 
-  if (mDef.key === 'speed') {
-    const r = computeSpeed(series)
-    times = r.times; values = r.values
-  } else if (mDef.key === 'accel') {
-    const r = computeAcceleration(series)
-    times = r.times; values = r.values
-  } else if (mDef.key === 'jerk') {
-    const r = computeJerk(series)
-    times = r.times; values = r.values
-  } else if (mDef.key === 'normjerk') {
-    const nj = computeNormalizedJerk(series)
-    const wrap = document.createElement('div')
-    wrap.className = 'chart-wrap'
-    wrap.innerHTML = `<div style="font-size:12px;color:var(--text-muted)">${mDef.label}</div>
-      <div style="font-size:24px;font-weight:700;color:${mDef.color};padding:12px 0">
-        ${nj != null ? nj.toFixed(4) : 'N/A'}
-      </div>
-      <div style="font-size:11px;color:var(--text-muted)">Log-normalized jerk (dimensionless)</div>`
-    container.appendChild(wrap)
-    return
-  } else if (mDef.key === 'sampentropy') {
-    const speedData = computeSpeed(series)
-    const se = computeSampleEntropy(speedData.values)
-    const wrap = document.createElement('div')
-    wrap.className = 'chart-wrap'
-    wrap.innerHTML = `<div style="font-size:12px;color:var(--text-muted)">${mDef.label}</div>
-      <div style="font-size:24px;font-weight:700;color:${mDef.color};padding:12px 0">
-        ${se != null ? se.toFixed(4) : 'N/A'}
-      </div>
-      <div style="font-size:11px;color:var(--text-muted)">Sample entropy of speed signal (m=2, r=0.2σ)</div>`
-    container.appendChild(wrap)
-    return
-  } else if (mDef.key === 'rom') {
-    const rom = computeROM(series)
-    const wrap = document.createElement('div')
-    wrap.className = 'chart-wrap'
-    wrap.innerHTML = `<div style="font-size:12px;color:var(--text-muted)">${mDef.label}</div>
-      <div style="font-size:18px;font-weight:700;color:${mDef.color};padding:8px 0">
-        X: ${rom.x.toFixed(2)} ${unit} &nbsp;·&nbsp;
-        Y: ${rom.y.toFixed(2)} ${unit} &nbsp;·&nbsp;
-        Resultant: ${rom.resultant.toFixed(2)} ${unit}
-      </div>`
-    container.appendChild(wrap)
-    return
+// One line per landmark for speed / accel / jerk
+function renderLineChart(area, landmarkSeries, mDef, unit) {
+  const datasets = []
+
+  for (let i = 0; i < landmarkSeries.length; i++) {
+    const { name, series } = landmarkSeries[i]
+    let result = { times: [], values: [] }
+    if (mDef.key === 'speed') result = computeSpeed(series)
+    else if (mDef.key === 'accel') result = computeAcceleration(series)
+    else if (mDef.key === 'jerk')  result = computeJerk(series)
+    if (!result.values.length) continue
+
+    const color = getColor(i)
+    datasets.push({
+      label: name,
+      data: result.times.map((t, j) => ({ x: t, y: result.values[j] })),
+      borderColor: color,
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+    })
   }
 
-  if (!values.length) return
+  if (!datasets.length) return
 
   const wrap = document.createElement('div')
   wrap.className = 'chart-wrap'
   const canvas = document.createElement('canvas')
   wrap.appendChild(canvas)
-  container.appendChild(wrap)
+  area.appendChild(wrap)
 
   charts[mDef.key] = new Chart(canvas, {
     type: 'line',
-    data: {
-      labels: times.map(t => t.toFixed(2)),
-      datasets: [{
-        label: `${mDef.label} (${unit}${mDef.unit})`,
-        data: values,
-        borderColor: mDef.color,
-        backgroundColor: mDef.color + '22',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.3,
-        fill: true,
-      }]
-    },
+    data: { datasets },
     options: {
       responsive: true,
       animation: false,
+      parsing: false,
       plugins: {
-        legend: { labels: { color: '#e2e8f0', font: { size: 11 } } }
+        legend: {
+          labels: { color: '#e2e8f0', font: { size: 10 }, boxWidth: 12 },
+          // Collapse legend when many landmarks to save space
+          display: landmarkSeries.length <= 20,
+        },
+        title: {
+          display: true,
+          text: `${mDef.label} (${unit}${mDef.unit})`,
+          color: '#e2e8f0',
+          font: { size: 12 },
+        },
       },
       scales: {
-        x: { ticks: { color: '#8892a4', maxTicksLimit: 10 }, grid: { color: '#2e3248' },
-             title: { display: true, text: 'Time (s)', color: '#8892a4' } },
-        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } }
-      }
-    }
+        x: {
+          type: 'linear',
+          ticks: { color: '#8892a4', maxTicksLimit: 10 },
+          grid: { color: '#2e3248' },
+          title: { display: true, text: 'Time (s)', color: '#8892a4' },
+        },
+        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
+      },
+    },
   })
 }
 
-function renderStats(container, series, unit) {
-  const speedData = computeSpeed(series)
-  const stats = summarize(speedData.values)
-  const rom   = computeROM(series)
+// Per-landmark table for scalar metrics (normjerk, sampentropy, rom)
+function renderScalarTable(area, landmarkSeries, mDef, unit) {
+  const isRom = mDef.key === 'rom'
 
+  const rows = landmarkSeries.map(({ name, series }, i) => {
+    const color = getColor(i)
+    if (isRom) {
+      const rom = computeROM(series)
+      return `<tr>
+        <td style="color:${color};white-space:nowrap">${name}</td>
+        <td>${rom.x.toFixed(3)}</td>
+        <td>${rom.y.toFixed(3)}</td>
+        <td>${rom.resultant.toFixed(3)}</td>
+      </tr>`
+    }
+    let val = null
+    if (mDef.key === 'normjerk') {
+      val = computeNormalizedJerk(series)
+    } else {
+      val = computeSampleEntropy(computeSpeed(series).values)
+    }
+    return `<tr>
+      <td style="color:${color};white-space:nowrap">${name}</td>
+      <td colspan="3">${val != null ? val.toFixed(4) : 'N/A'}</td>
+    </tr>`
+  }).join('')
+
+  const wrap = document.createElement('div')
+  wrap.className = 'chart-wrap'
+  wrap.innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:8px">
+      ${mDef.label}
+    </div>
+    <div style="max-height:220px;overflow-y:auto">
+      <table class="stats-table">
+        <thead><tr>
+          <th>Landmark</th>
+          ${isRom
+            ? `<th>ROM X (${unit})</th><th>ROM Y (${unit})</th><th>Resultant (${unit})</th>`
+            : `<th colspan="3">Value</th>`}
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`
+  area.appendChild(wrap)
+}
+
+function renderStats(container, landmarkSeries, unit) {
   const statsEl = container.querySelector('#an-stats-content')
   if (!statsEl) return
 
+  const rows = landmarkSeries.map(({ name, series }, i) => {
+    const speed = computeSpeed(series)
+    const s     = summarize(speed.values)
+    const rom   = computeROM(series)
+    const color = getColor(i)
+    return `<tr>
+      <td style="color:${color};white-space:nowrap">${name}</td>
+      <td>${s.mean?.toFixed(3) ?? '—'}</td>
+      <td>${s.max?.toFixed(3)  ?? '—'}</td>
+      <td>${s.std?.toFixed(3)  ?? '—'}</td>
+      <td>${((s.cv ?? 0) * 100).toFixed(1)}%</td>
+      <td>${rom.x?.toFixed(3)  ?? '—'}</td>
+      <td>${rom.y?.toFixed(3)  ?? '—'}</td>
+      <td>${rom.resultant?.toFixed(3) ?? '—'}</td>
+    </tr>`
+  }).join('')
+
   statsEl.innerHTML = `
-    <table class="stats-table">
-      <thead><tr><th>Metric</th><th>Value</th><th>Unit</th></tr></thead>
-      <tbody>
-        <tr><td>Peak Speed</td><td>${stats.max?.toFixed(3) ?? '—'}</td><td>${unit}/s</td></tr>
-        <tr><td>Mean Speed</td><td>${stats.mean?.toFixed(3) ?? '—'}</td><td>${unit}/s</td></tr>
-        <tr><td>Speed Std Dev</td><td>${stats.std?.toFixed(3) ?? '—'}</td><td>${unit}/s</td></tr>
-        <tr><td>Speed CV</td><td>${(stats.cv * 100)?.toFixed(1) ?? '—'}%</td><td></td></tr>
-        <tr><td>ROM X</td><td>${rom.x?.toFixed(3) ?? '—'}</td><td>${unit}</td></tr>
-        <tr><td>ROM Y</td><td>${rom.y?.toFixed(3) ?? '—'}</td><td>${unit}</td></tr>
-        <tr><td>ROM Resultant</td><td>${rom.resultant?.toFixed(3) ?? '—'}</td><td>${unit}</td></tr>
-        <tr><td>Frames</td><td>${currentTrial.landmarkData?.length ?? 0}</td><td></td></tr>
-        <tr><td>Duration</td><td>${currentTrial.duration?.toFixed(1) ?? '—'}</td><td>s</td></tr>
-      </tbody>
-    </table>`
+    <div style="overflow-x:auto">
+      <table class="stats-table">
+        <thead><tr>
+          <th>Landmark</th>
+          <th>Mean Spd</th><th>Peak Spd</th><th>Std Dev</th><th>CV%</th>
+          <th>ROM X</th><th>ROM Y</th><th>ROM res.</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
+      Speed unit: ${unit}/s &nbsp;·&nbsp; ROM unit: ${unit} &nbsp;·&nbsp;
+      Frames: ${currentTrial.landmarkData?.length ?? 0} &nbsp;·&nbsp;
+      Duration: ${currentTrial.duration?.toFixed(1) ?? '—'} s
+    </div>`
 }
 
 // ── Group analysis ─────────────────────────────────────────────
