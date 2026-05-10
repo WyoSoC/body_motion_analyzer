@@ -400,6 +400,32 @@ function renderLineChart(area, landmarkSeries, mDef, unit) {
 
   const wrap = document.createElement('div')
   wrap.className = 'chart-wrap'
+
+  // Download button — placed before canvas so it sits at top-right
+  const dlRow = document.createElement('div')
+  dlRow.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:4px'
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'btn btn-ghost btn-sm'
+  dlBtn.textContent = '⬇ PNG'
+  dlBtn.style.fontSize = '11px'
+  dlBtn.addEventListener('click', () => {
+    const chart = charts[mDef.key]
+    if (!chart) return
+    const tmp = document.createElement('canvas')
+    tmp.width  = chart.canvas.width
+    tmp.height = chart.canvas.height
+    const tCtx = tmp.getContext('2d')
+    tCtx.fillStyle = '#1a1f2e'
+    tCtx.fillRect(0, 0, tmp.width, tmp.height)
+    tCtx.drawImage(chart.canvas, 0, 0)
+    const a = document.createElement('a')
+    a.href     = tmp.toDataURL('image/png')
+    a.download = `${currentTrial?.name ?? 'trial'}_${mDef.key}.png`
+    a.click()
+  })
+  dlRow.appendChild(dlBtn)
+  wrap.appendChild(dlRow)
+
   const canvas = document.createElement('canvas')
   wrap.appendChild(canvas)
   area.appendChild(wrap)
@@ -521,6 +547,49 @@ function renderStats(container, landmarkSeries, unit) {
       Frames: ${currentTrial.landmarkData?.length ?? 0} &nbsp;·&nbsp;
       Duration: ${currentTrial.duration?.toFixed(1) ?? '—'} s
     </div>`
+
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'btn btn-ghost btn-sm mt-8'
+  dlBtn.textContent = '⬇ Download Stats CSV'
+  dlBtn.addEventListener('click', () => downloadStatsCsv(landmarkSeries, unit))
+  statsEl.appendChild(dlBtn)
+}
+
+function downloadStatsCsv(landmarkSeries, unit) {
+  const header = [
+    'Landmark',
+    `Mean Speed (${unit}/s)`, `Peak Speed (${unit}/s)`,
+    `Std Dev (${unit}/s)`, 'CV%',
+    `ROM X (${unit})`, `ROM Y (${unit})`, `ROM Resultant (${unit})`,
+    'Norm. Jerk (log)', 'Sample Entropy',
+  ]
+
+  const dataRows = landmarkSeries.map(({ name, series }) => {
+    const speed = computeSpeed(series)
+    const s     = summarize(speed.values)
+    const rom   = computeROM(series)
+    const nj    = computeNormalizedJerk(series)
+    const se    = computeSampleEntropy(speed.values)
+    return [
+      name,
+      s.mean?.toFixed(4)         ?? '',
+      s.max?.toFixed(4)          ?? '',
+      s.std?.toFixed(4)          ?? '',
+      ((s.cv ?? 0) * 100).toFixed(2),
+      rom.x?.toFixed(4)          ?? '',
+      rom.y?.toFixed(4)          ?? '',
+      rom.resultant?.toFixed(4)  ?? '',
+      nj != null ? nj.toFixed(4) : '',
+      se != null ? se.toFixed(4) : '',
+    ]
+  })
+
+  const csv = [header, ...dataRows]
+    .map(r => r.map(v => `"${v}"`).join(','))
+    .join('\n')
+
+  const trialName = currentTrial?.name ?? 'trial'
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), `${trialName}_stats.csv`)
 }
 
 // ── Group analysis ─────────────────────────────────────────────
