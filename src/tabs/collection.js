@@ -266,6 +266,21 @@ function bindEvents(container) {
   // Camera
   container.querySelector('#col-start-cam').addEventListener('click', () => startCamera(container))
   container.querySelector('#col-stop-cam').addEventListener('click',  () => stopCameraFn(container))
+
+  // Model switching — reload MediaPipe while keeping the camera stream alive
+  container.querySelector('#col-model-sel').addEventListener('change', (e) => {
+    if (isRecording) {
+      e.target.value = currentModel   // revert — can't switch mid-trial
+      setStatus(container, 'Stop the current trial before switching models.')
+      return
+    }
+    if (!videoEl.srcObject) {
+      currentModel = e.target.value   // camera not running — apply on next Start
+      return
+    }
+    switchModel(container, e.target.value)
+  })
+
   container.querySelector('#col-flip-btn').addEventListener('click',  () => {
     isFlipped = !isFlipped
     const t = isFlipped ? 'scaleX(-1)' : ''
@@ -450,6 +465,28 @@ function friendlyError(err) {
   if (name === 'OverconstrainedError') return 'Selected camera could not be opened. Try a different camera.'
   if (err.message?.includes('Vision not initialized')) return 'MediaPipe failed to load. Check the status bar and reload the page.'
   return err.message ?? 'Unknown error'
+}
+
+async function switchModel(container, model) {
+  stopRenderLoop()
+  ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+  setCamOverlay(container, `⏳ Switching to ${model === 'pose' ? 'Pose (Full Body)' : 'Hands'} model…<br/><small style="color:#8892a4">First load: ~10–30 s</small>`)
+  setStatus(container, 'Switching model…')
+  container.querySelector('#col-start-trial').disabled = true
+
+  try {
+    landmarker  = await loadModel(model)
+    currentModel = model
+    setCamOverlay(container, '')
+    setStatus(container, `Model switched to ${model === 'pose' ? 'Pose (Full Body)' : 'Hands'}.`)
+    if (currentSession) container.querySelector('#col-start-trial').disabled = false
+    startRenderLoop(container)
+  } catch (err) {
+    const msg = friendlyError(err)
+    setCamOverlay(container, `⚠ ${msg}`, true)
+    setStatus(container, msg)
+    container.querySelector('#col-model-sel').value = currentModel  // revert selector
+  }
 }
 
 function stopCameraFn(container) {
