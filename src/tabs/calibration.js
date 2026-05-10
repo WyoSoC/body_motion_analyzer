@@ -17,7 +17,7 @@ let isFlipped    = false
 // Checkerboard auto-detect
 let detecting    = false
 let detectRAF    = null
-let _cvPromise   = null           // singleton OpenCV load
+let _worker      = null
 
 // ── Entry point ───────────────────────────────────────────────
 
@@ -228,11 +228,17 @@ function switchMethod(container, method) {
     cbFields.classList.add('hidden')
     overlayCanvas.style.cursor = 'crosshair'
     setInstructions(container, `
+      <p style="font-size:13px;color:var(--text);margin-bottom:10px">
+        Calibration can be performed with a ruler or an object of known length.
+        You can also print out a Letter Size checkerboard for automated calibration —
+        <a href="./checkerboard-calibration.pdf" download
+           style="color:var(--accent);text-underline-offset:2px">⬇ Download</a>.
+      </p>
       <ol style="padding-left:16px;line-height:2;font-size:13px;color:var(--text-muted)">
         <li>Start the camera.</li>
-        <li>Place a ruler or any object of known length in the frame.</li>
-        <li><strong>Click 2 points</strong> on the preview — e.g. 0 cm and 10 cm marks.</li>
-        <li>Enter the real distance and choose <em>mm</em> or <em>inches</em>.</li>
+        <li>Place a ruler or object of known length flat in the scene where the subject will move.</li>
+        <li><strong>Click 2 points</strong> on the preview — e.g. the 0 cm and 10 cm marks.</li>
+        <li>Enter the real distance between those two points and choose <em>mm</em> or <em>inches</em>.</li>
         <li>Click <strong>Calculate</strong>, then <strong>Save Profile</strong>.</li>
       </ol>`)
   } else {
@@ -254,7 +260,7 @@ function switchMethod(container, method) {
         <li>When corners are detected the overlay turns green. Click <strong>Capture</strong> to save the scale.</li>
       </ol>
       <p style="font-size:11px;color:var(--text-muted);margin-top:8px">
-        ⚠ OpenCV.js (~8 MB) is downloaded on first use (up to 30 s) and cached by the browser.
+        ⚠ OpenCV.js (~10 MB) loads in the background — the page stays responsive while it initializes.
       </p>`)
   }
 }
@@ -391,89 +397,55 @@ function showResult(container, html) {
   container.querySelector('#cal-save-btn').disabled = false
 }
 
-// ── OpenCV lazy load ──────────────────────────────────────────
+// ── Checkerboard auto-detection (Web Worker) ──────────────────
 
-const OPENCV_URL = 'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js'
-const OPENCV_TIMEOUT_MS = 30_000
-
-function loadOpenCV(onProgress) {
-  if (_cvPromise) return _cvPromise
-  _cvPromise = new Promise((resolve, reject) => {
-    if (window.cv?.Mat) { resolve(window.cv); return }
-    onProgress?.('Downloading OpenCV.js (~8 MB) — first load may take up to 30 s…')
-
-    let settled = false
-    const done = (err, val) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timerId)
-      if (err) { _cvPromise = null; reject(err) }
-      else resolve(val)
-    }
-
-    const timerId = setTimeout(() => {
-      script.remove()
-      done(new Error('OpenCV.js failed to initialize within 30 s. Please reload and try again.'))
-    }, OPENCV_TIMEOUT_MS)
-
-    // window.Module must be set before the script tag is appended
-    window.Module = window.Module ?? {}
-    window.Module.onRuntimeInitialized = () => done(null, window.cv)
-
-    const script = document.createElement('script')
-    script.src   = OPENCV_URL
-    script.async = true
-    script.onerror = () => { script.remove(); done(new Error('OpenCV.js failed to load. Please reload and try again.')) }
-    document.head.appendChild(script)
-  })
-  return _cvPromise
-}
-
-// ── Checkerboard auto-detection ───────────────────────────────
-
-async function startDetection(container) {
+function startDetection(container) {
   if (!videoEl.srcObject) { alert('Start the camera first.'); return }
-
-  const statusEl = container.querySelector('#cal-detect-status')
-  setDetectStatus(container, 'loading', 'Loading OpenCV.js (30 s timeout)…')
-  container.querySelector('#cal-detect-btn').disabled      = true
-  container.querySelector('#cal-stop-detect-btn').disabled = false
-
-  let cv
-  try {
-    cv = await loadOpenCV((msg) => setDetectStatus(container, 'loading', msg))
-  } catch (err) {
-    setDetectStatus(container, 'error', err.message)
-    container.querySelector('#cal-detect-btn').disabled      = false
-    container.querySelector('#cal-stop-detect-btn').disabled = true
-    return
-  }
 
   const cols = parseInt(container.querySelector('#cal-cols').value)
   const rows = parseInt(container.querySelector('#cal-rows').value)
-  detecting  = true
-  setDetectStatus(container, 'scanning', `Scanning for ${cols}×${rows} checkerboard…`)
 
-  let stableFrames = 0   // count consecutive detections before offering capture
+  setDetectStatus(container, 'loading', 'Loading OpenCV.js in background…')
+  container.querySelector('#cal-detect-btn').disabled      = true
+  container.querySelector('#cal-stop-detect-btn').disabled = false
 
-  function loop() {
+  detecting = true
+  let workerReady  = false
+  let workerBusy   = false
+  let stableFrames = 0
+
+  _worker = new Worker(`${import.meta.env.BASE_URL}vendor/cv-worker.js`)
+
+  _worker.onerror = () => {
+    setDetectStatus(container, 'error', 'OpenCV.js failed to load. Please reload and try again.')
+    container.querySelector('#cal-detect-btn').disabled      = false
+    container.querySelector('#cal-stop-detect-btn').disabled = true
+    detecting = false
+    _worker = null
+  }
+
+  _worker.onmessage = (e) => {
+    const { type, corners, avgPx } = e.data
+
+    if (type === 'ready') {
+      workerReady = true
+      setDetectStatus(container, 'scanning', `Scanning for ${cols}×${rows} checkerboard…`)
+      return
+    }
+
+    workerBusy = false
     if (!detecting) return
-    detectRAF = requestAnimationFrame(loop)
-    if (videoEl.readyState < 2) return
 
-    const result = tryFindCheckerboard(cv, cols, rows)
-    if (result) {
+    if (type === 'result') {
       stableFrames++
-      drawCornersOverlay(result.corners, cols, rows, '#3ecf70')
+      drawCornersOverlay(corners, cols, rows, '#3ecf70')
       setDetectStatus(container, 'found',
-        `✔ Detected (${stableFrames} frame${stableFrames > 1 ? 's' : ''}) — avg square: ${result.avgPx.toFixed(1)} px`)
-
+        `✔ Detected (${stableFrames} frame${stableFrames > 1 ? 's' : ''}) — avg square: ${avgPx.toFixed(1)} px`)
       if (stableFrames >= 5) {
-        // Enough stable frames — offer capture
         setDetectStatus(container, 'ready',
           `✔ Stable detection — click <strong>Capture</strong> to compute scale.`)
         stopDetectionLoop()
-        showCaptureButton(container, result)
+        showCaptureButton(container, { corners, avgPx })
       }
     } else {
       stableFrames = 0
@@ -481,12 +453,31 @@ async function startDetection(container) {
       setDetectStatus(container, 'scanning', `Scanning for ${cols}×${rows} checkerboard…`)
     }
   }
+
+  function loop() {
+    if (!detecting) return
+    detectRAF = requestAnimationFrame(loop)
+    if (!workerReady || workerBusy || videoEl.readyState < 2) return
+
+    const w = videoEl.videoWidth, h = videoEl.videoHeight
+    const tmp = document.createElement('canvas')
+    tmp.width = w; tmp.height = h
+    tmp.getContext('2d').drawImage(videoEl, 0, 0)
+    const imageData = tmp.getContext('2d').getImageData(0, 0, w, h)
+
+    workerBusy = true
+    _worker.postMessage(
+      { type: 'detect', buffer: imageData.data.buffer, width: w, height: h, cols, rows },
+      [imageData.data.buffer]
+    )
+  }
   detectRAF = requestAnimationFrame(loop)
 }
 
 function stopDetection(container) {
   stopDetectionLoop()
   detecting = false
+  if (_worker) { _worker.terminate(); _worker = null }
   ctx?.clearRect(0, 0, overlayCanvas?.width, overlayCanvas?.height)
   const detectBtn = container?.querySelector('#cal-detect-btn')
   const stopBtn   = container?.querySelector('#cal-stop-detect-btn')
@@ -543,68 +534,6 @@ function setDetectStatus(container, state, msg) {
   el.style.borderColor = state === 'found' || state === 'ready'
     ? 'rgba(62,207,112,.3)' : 'var(--border)'
   el.innerHTML = msg
-}
-
-// ── OpenCV checkerboard detection ────────────────────────────
-
-function tryFindCheckerboard(cv, cols, rows) {
-  // Capture current video frame
-  const tmpCanvas = document.createElement('canvas')
-  tmpCanvas.width  = videoEl.videoWidth
-  tmpCanvas.height = videoEl.videoHeight
-  tmpCanvas.getContext('2d').drawImage(videoEl, 0, 0)
-
-  let src = null, gray = null, corners = null
-  try {
-    src     = cv.imread(tmpCanvas)
-    gray    = new cv.Mat()
-    corners = new cv.Mat()
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
-
-    const patSize = new cv.Size(cols, rows)
-    const flags   = cv.CALIB_CB_ADAPTIVE_THRESH | cv.CALIB_CB_NORMALIZE_IMAGE
-    const found   = cv.findChessboardCorners(gray, patSize, corners, flags)
-
-    if (!found || corners.rows === 0) return null
-
-    // Sub-pixel refinement
-    const winSize  = new cv.Size(11, 11)
-    const zeroZone = new cv.Size(-1, -1)
-    const criteria = new cv.TermCriteria(
-      cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    cv.cornerSubPix(gray, corners, winSize, zeroZone, criteria)
-
-    // Compute average horizontal inter-corner distance (in px)
-    const data = corners.data32F
-    let totalDist = 0, count = 0
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols - 1; c++) {
-        const i1 = (r * cols + c) * 2
-        const i2 = (r * cols + c + 1) * 2
-        const dx = data[i2] - data[i1]
-        const dy = data[i2 + 1] - data[i1 + 1]
-        totalDist += Math.sqrt(dx * dx + dy * dy)
-        count++
-      }
-    }
-    // Also vertical
-    for (let r = 0; r < rows - 1; r++) {
-      for (let c = 0; c < cols; c++) {
-        const i1 = (r * cols + c) * 2
-        const i2 = ((r + 1) * cols + c) * 2
-        const dx = data[i2] - data[i1]
-        const dy = data[i2 + 1] - data[i1 + 1]
-        totalDist += Math.sqrt(dx * dx + dy * dy)
-        count++
-      }
-    }
-
-    return { avgPx: totalDist / count, corners: data, numCols: cols, numRows: rows }
-  } catch (_) {
-    return null
-  } finally {
-    src?.delete(); gray?.delete(); corners?.delete()
-  }
 }
 
 function drawCornersOverlay(cornersData, cols, rows, color = '#3ecf70') {
@@ -724,6 +653,7 @@ export function getCalibrations() { return calibrations }
 
 export function deactivateCalibration() {
   stopDetectionLoop()
+  if (_worker) { _worker.terminate(); _worker = null }
   stopCamera(videoEl)
   activeStream = null
   const startBtn = document.querySelector('#cal-start-cam')
