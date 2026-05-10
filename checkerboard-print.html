@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Calibration Checkerboard – 9×6 inner corners, 25 mm squares</title>
+<style>
+  /* ── Print page setup ──────────────────────────────── */
+  @page {
+    size: letter landscape;   /* 279.4 mm × 215.9 mm     */
+    margin: 0;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    width:  279.4mm;
+    height: 215.9mm;
+    background: #fff;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+
+  /* ── Info header ────────────────────────────────────── */
+  .info-header {
+    width: 252mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 3mm;
+    font-size: 8pt;
+    color: #333;
+  }
+  .info-header .title {
+    font-size: 10pt;
+    font-weight: 700;
+    color: #000;
+  }
+  .info-header .params {
+    font-size: 7.5pt;
+    color: #555;
+    text-align: right;
+    line-height: 1.5;
+  }
+
+  /* ── Checkerboard ───────────────────────────────────── */
+  /*
+     Grid: 10 columns × 7 rows of 25 mm squares
+     Total board: 250 mm × 175 mm
+     Surrounded by a 2 mm white border so edge squares
+     (especially white ones) are clearly visible when cut.
+  */
+  .board-wrap {
+    border: 2mm solid #fff;          /* white surround         */
+    outline: 0.3mm solid #aaa;       /* thin grey trim to cut  */
+    display: inline-block;
+    line-height: 0;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(10, 25mm);
+    grid-template-rows:    repeat(7,  25mm);
+    width:  250mm;
+    height: 175mm;
+  }
+
+  .sq { width: 25mm; height: 25mm; }
+  .sq.b { background: #000; }
+  .sq.w { background: #fff; }
+
+  /* ── Footer ─────────────────────────────────────────── */
+  .footer {
+    width: 252mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-top: 3mm;
+    font-size: 7pt;
+    color: #555;
+    line-height: 1.5;
+  }
+  .footer .instructions ol {
+    padding-left: 14pt;
+  }
+  .footer .scale-ref {
+    text-align: right;
+  }
+  .scale-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1mm;
+    margin-top: 1mm;
+  }
+  .scale-bar-line {
+    width: 25mm;
+    height: 2mm;
+    background: linear-gradient(to right, #000 50%, #fff 50%);
+    border: 0.3mm solid #666;
+  }
+  .scale-bar-label {
+    font-size: 6.5pt;
+    color: #333;
+  }
+
+  /* ── Screen preview (non-print) ─────────────────────── */
+  @media screen {
+    html { background: #e5e5e5; }
+    body {
+      width: 297mm;
+      min-height: 210mm;
+      margin: 12mm auto;
+      background: #fff;
+      box-shadow: 0 4px 24px rgba(0,0,0,.25);
+      padding: 10mm;
+    }
+    .print-btn {
+      position: fixed; top: 16px; right: 16px;
+      padding: 10px 22px;
+      background: #5b7fff; color: #fff;
+      border: none; border-radius: 6px;
+      font-size: 14px; font-weight: 700;
+      cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+    }
+    .print-btn:hover { background: #4060dd; }
+  }
+
+  @media print {
+    .print-btn { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
+
+<!-- Header -->
+<div class="info-header">
+  <span class="title">Motion Analyzer – Calibration Checkerboard</span>
+  <span class="params">
+    Inner corners: <strong>9 × 6</strong> &nbsp;|&nbsp;
+    Square size: <strong>25 mm</strong> &nbsp;|&nbsp;
+    Grid: 10 × 7 squares &nbsp;|&nbsp;
+    Board size: 250 × 175 mm
+  </span>
+</div>
+
+<!-- Board -->
+<div class="board-wrap">
+  <div class="board" id="board"></div>
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  <div class="instructions">
+    <strong>How to use in Motion Analyzer → Tab 1 (Calibration):</strong>
+    <ol>
+      <li>Print at <strong>100% scale</strong> – do not fit to page.</li>
+      <li>Verify the scale bar (right) measures exactly 25 mm with a ruler.</li>
+      <li>Place the board flat and perpendicular to the camera.</li>
+      <li>Set Inner Cols = <strong>9</strong>, Inner Rows = <strong>6</strong>, Square Size = <strong>25 mm</strong>.</li>
+      <li>Click 2 points that span a known number of squares, enter that count, then click Calculate.</li>
+    </ol>
+  </div>
+  <div class="scale-ref">
+    <strong>Scale verification</strong><br/>
+    The bar below should be exactly 25 mm wide:
+    <div class="scale-bar">
+      <div class="scale-bar-line"></div>
+      <span class="scale-bar-label">← 25 mm →</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Generate 10 × 7 alternating squares
+  // Square (col, row) is black when (col + row) is even
+  const board = document.getElementById('board')
+  for (let row = 0; row < 7; row++) {
+    for (let col = 0; col < 10; col++) {
+      const sq = document.createElement('div')
+      sq.className = 'sq ' + ((col + row) % 2 === 0 ? 'b' : 'w')
+      board.appendChild(sq)
+    }
+  }
+</script>
+
+</body>
+</html>
