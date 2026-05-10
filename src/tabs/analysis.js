@@ -17,8 +17,11 @@ let activeMetrics = new Set(['speed'])
 let activeGroup   = null          // name of highlighted group chip, or null
 let customIndices = new Set()     // always the source of truth for which landmarks to plot
 
-let charts = {}
-let playbackRAF = null
+let charts       = {}
+let chartDatasets = {}   // mDef.key → datasets[], for modal re-render
+let modalChart   = null
+let modalEl      = null
+let playbackRAF  = null
 
 // 33-color palette (golden-angle HSL beyond the list)
 const COLOR_PALETTE = [
@@ -352,6 +355,8 @@ function renderAnalysis(container) {
   chartsArea.innerHTML = ''
   Object.values(charts).forEach(c => c.destroy())
   charts = {}
+  chartDatasets = {}
+  closeModal()
 
   const unit = currentCalibration ? 'mm' : 'norm'
 
@@ -372,6 +377,41 @@ function renderMetricChart(area, landmarkSeries, mDef, unit) {
   }
 }
 
+// Shared Chart.js config builder — used for both inline and modal charts
+function buildLineChartConfig(datasets, mDef, unit, { modal = false } = {}) {
+  return {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: !modal,
+      animation: false,
+      parsing: false,
+      plugins: {
+        legend: {
+          labels: { color: '#e2e8f0', font: { size: modal ? 12 : 10 }, boxWidth: 12 },
+          display: datasets.length <= (modal ? 33 : 20),
+        },
+        title: {
+          display: true,
+          text: `${mDef.label} (${unit}${mDef.unit})`,
+          color: '#e2e8f0',
+          font: { size: modal ? 15 : 12 },
+        },
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: { color: '#8892a4', maxTicksLimit: modal ? 15 : 10 },
+          grid: { color: '#2e3248' },
+          title: { display: true, text: 'Time (s)', color: '#8892a4' },
+        },
+        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
+      },
+    },
+  }
+}
+
 // One line per landmark for speed / accel / jerk
 function renderLineChart(area, landmarkSeries, mDef, unit) {
   const datasets = []
@@ -384,11 +424,10 @@ function renderLineChart(area, landmarkSeries, mDef, unit) {
     else if (mDef.key === 'jerk')  result = computeJerk(series)
     if (!result.values.length) continue
 
-    const color = getColor(i)
     datasets.push({
       label: name,
       data: result.times.map((t, j) => ({ x: t, y: result.values[j] })),
-      borderColor: color,
+      borderColor: getColor(i),
       backgroundColor: 'transparent',
       borderWidth: 1.5,
       pointRadius: 0,
@@ -397,13 +436,21 @@ function renderLineChart(area, landmarkSeries, mDef, unit) {
   }
 
   if (!datasets.length) return
+  chartDatasets[mDef.key] = datasets   // store for modal re-render
 
   const wrap = document.createElement('div')
   wrap.className = 'chart-wrap'
 
-  // Download button — placed before canvas so it sits at top-right
-  const dlRow = document.createElement('div')
-  dlRow.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:4px'
+  // Button row: Expand + PNG
+  const btnRow = document.createElement('div')
+  btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;margin-bottom:4px'
+
+  const expandBtn = document.createElement('button')
+  expandBtn.className = 'btn btn-ghost btn-sm'
+  expandBtn.textContent = '⛶ Expand'
+  expandBtn.style.fontSize = '11px'
+  expandBtn.addEventListener('click', () => openModal(mDef, unit))
+
   const dlBtn = document.createElement('button')
   dlBtn.className = 'btn btn-ghost btn-sm'
   dlBtn.textContent = '⬇ PNG'
@@ -423,44 +470,73 @@ function renderLineChart(area, landmarkSeries, mDef, unit) {
     a.download = `${currentTrial?.name ?? 'trial'}_${mDef.key}.png`
     a.click()
   })
-  dlRow.appendChild(dlBtn)
-  wrap.appendChild(dlRow)
+
+  btnRow.appendChild(expandBtn)
+  btnRow.appendChild(dlBtn)
+  wrap.appendChild(btnRow)
 
   const canvas = document.createElement('canvas')
   wrap.appendChild(canvas)
   area.appendChild(wrap)
 
-  charts[mDef.key] = new Chart(canvas, {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      animation: false,
-      parsing: false,
-      plugins: {
-        legend: {
-          labels: { color: '#e2e8f0', font: { size: 10 }, boxWidth: 12 },
-          // Collapse legend when many landmarks to save space
-          display: landmarkSeries.length <= 20,
-        },
-        title: {
-          display: true,
-          text: `${mDef.label} (${unit}${mDef.unit})`,
-          color: '#e2e8f0',
-          font: { size: 12 },
-        },
-      },
-      scales: {
-        x: {
-          type: 'linear',
-          ticks: { color: '#8892a4', maxTicksLimit: 10 },
-          grid: { color: '#2e3248' },
-          title: { display: true, text: 'Time (s)', color: '#8892a4' },
-        },
-        y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
-      },
-    },
-  })
+  charts[mDef.key] = new Chart(canvas, buildLineChartConfig(datasets, mDef, unit))
+}
+
+// ── Chart modal (full-screen expand) ─────────────────────────
+
+function getOrCreateModal() {
+  if (modalEl) return modalEl
+
+  modalEl = document.createElement('div')
+  modalEl.style.cssText = `
+    display:none; position:fixed; inset:0; z-index:9999;
+    background:rgba(0,0,0,.88);
+    align-items:center; justify-content:center;`
+
+  const inner = document.createElement('div')
+  inner.style.cssText = `
+    position:relative; width:94vw; height:88vh;
+    background:#1a1f2e; border-radius:10px;
+    padding:48px 24px 24px;
+    display:flex; flex-direction:column;`
+
+  const closeBtn = document.createElement('button')
+  closeBtn.className = 'btn btn-ghost btn-sm'
+  closeBtn.textContent = '✕ Close'
+  closeBtn.style.cssText = 'position:absolute;top:12px;right:12px'
+  closeBtn.addEventListener('click', closeModal)
+
+  const modalCanvas = document.createElement('canvas')
+  modalCanvas.id = 'an-modal-canvas'
+  modalCanvas.style.cssText = 'flex:1;min-height:0;'
+
+  inner.appendChild(closeBtn)
+  inner.appendChild(modalCanvas)
+  modalEl.appendChild(inner)
+  document.body.appendChild(modalEl)
+
+  // Close on backdrop click or Escape key
+  modalEl.addEventListener('click', e => { if (e.target === modalEl) closeModal() })
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal() })
+
+  return modalEl
+}
+
+function openModal(mDef, unit) {
+  const datasets = chartDatasets[mDef.key]
+  if (!datasets?.length) return
+
+  const modal = getOrCreateModal()
+  modal.style.display = 'flex'
+
+  if (modalChart) { modalChart.destroy(); modalChart = null }
+  const canvas = modal.querySelector('#an-modal-canvas')
+  modalChart = new Chart(canvas, buildLineChartConfig(datasets, mDef, unit, { modal: true }))
+}
+
+function closeModal() {
+  if (modalEl)   modalEl.style.display = 'none'
+  if (modalChart) { modalChart.destroy(); modalChart = null }
 }
 
 // Per-landmark table for scalar metrics (normjerk, sampentropy, rom)
