@@ -19,9 +19,11 @@ let customIndices = new Set()     // always the source of truth for which landma
 
 let charts       = {}
 let chartDatasets = {}   // mDef.key → datasets[], for modal re-render
+let groupCharts  = {}    // mDef.key → Chart instance for group analysis
 let modalChart   = null
 let modalEl      = null
 let playbackRAF  = null
+let groupAnalysisShowing = false
 
 // 33-color palette (golden-angle HSL beyond the list)
 const COLOR_PALETTE = [
@@ -179,6 +181,7 @@ function bindEvents(container) {
     else activeMetrics.add(key)
     btn.classList.toggle('active')
     renderAnalysis(container)
+    if (groupAnalysisShowing) runGroupAnalysis(container)
   })
 
   container.querySelector('#an-use-custom').addEventListener('click', () => {
@@ -539,6 +542,14 @@ function closeModal() {
   if (modalChart) { modalChart.destroy(); modalChart = null }
 }
 
+function openModalWithConfig(config) {
+  const modal = getOrCreateModal()
+  modal.style.display = 'flex'
+  if (modalChart) { modalChart.destroy(); modalChart = null }
+  const canvas = modal.querySelector('#an-modal-canvas')
+  modalChart = new Chart(canvas, config)
+}
+
 // Per-landmark table for scalar metrics (normjerk, sampentropy, rom)
 function renderScalarTable(area, landmarkSeries, mDef, unit) {
   const isRom = mDef.key === 'rom'
@@ -678,6 +689,9 @@ async function runGroupAnalysis(container) {
     alert('Select a Landmark Group or Custom Landmarks on the right panel first.')
     return
   }
+  groupAnalysisShowing = true
+  Object.values(groupCharts).forEach(c => { try { c.destroy() } catch (_) {} })
+  groupCharts = {}
 
   const trials  = await Promise.all(selectedIds.map(id => getTrial(id)))
   const indices = [...customIndices].sort((a, b) => a - b)
@@ -714,7 +728,7 @@ async function runGroupAnalysis(container) {
       <button class="btn btn-ghost btn-sm" id="an-clear-group">← Back</button>
     </div>`
   area.appendChild(header)
-  header.querySelector('#an-clear-group').addEventListener('click', () => { area.innerHTML = '' })
+  header.querySelector('#an-clear-group').addEventListener('click', () => { area.innerHTML = ''; groupAnalysisShowing = false })
 
   // One chart per active metric
   for (const mDef of METRIC_DEFS) {
@@ -751,28 +765,67 @@ function renderGroupLineChart(area, trialSeries, mDef) {
 
   if (!datasets.length) return
 
-  const wrap = document.createElement('div')
-  wrap.className = 'chart-wrap mt-8'
-  const canvas = document.createElement('canvas')
-  wrap.appendChild(canvas)
-  area.appendChild(wrap)
-
-  new Chart(canvas, {
+  const buildConfig = ({ modal = false } = {}) => ({
     type: 'line',
     data: { datasets },
     options: {
-      responsive: true, animation: false, parsing: false,
+      responsive: true,
+      maintainAspectRatio: !modal,
+      animation: false,
+      parsing: false,
       plugins: {
-        legend: { labels: { color: '#e2e8f0', font: { size: 11 }, boxWidth: 12 } },
-        title: { display: true, text: `${mDef.label} (norm${mDef.unit}) — centroid`, color: '#e2e8f0', font: { size: 12 } },
+        legend: { labels: { color: '#e2e8f0', font: { size: modal ? 12 : 11 }, boxWidth: 12 } },
+        title: { display: true, text: `${mDef.label} (norm${mDef.unit}) — centroid`, color: '#e2e8f0', font: { size: modal ? 15 : 12 } },
       },
       scales: {
-        x: { type: 'linear', ticks: { color: '#8892a4', maxTicksLimit: 10 }, grid: { color: '#2e3248' },
+        x: { type: 'linear', ticks: { color: '#8892a4', maxTicksLimit: modal ? 15 : 10 }, grid: { color: '#2e3248' },
              title: { display: true, text: 'Time (s)', color: '#8892a4' } },
         y: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
       },
     },
   })
+
+  const wrap = document.createElement('div')
+  wrap.className = 'chart-wrap mt-8'
+
+  const btnRow = document.createElement('div')
+  btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;margin-bottom:4px'
+
+  const expandBtn = document.createElement('button')
+  expandBtn.className = 'btn btn-ghost btn-sm'
+  expandBtn.textContent = '⛶ Expand'
+  expandBtn.style.fontSize = '11px'
+  expandBtn.addEventListener('click', () => openModalWithConfig(buildConfig({ modal: true })))
+
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'btn btn-ghost btn-sm'
+  dlBtn.textContent = '⬇ PNG'
+  dlBtn.style.fontSize = '11px'
+  dlBtn.addEventListener('click', () => {
+    const chart = groupCharts[mDef.key]
+    if (!chart) return
+    const tmp = document.createElement('canvas')
+    tmp.width  = chart.canvas.width
+    tmp.height = chart.canvas.height
+    const tCtx = tmp.getContext('2d')
+    tCtx.fillStyle = '#1a1f2e'
+    tCtx.fillRect(0, 0, tmp.width, tmp.height)
+    tCtx.drawImage(chart.canvas, 0, 0)
+    const a = document.createElement('a')
+    a.href     = tmp.toDataURL('image/png')
+    a.download = `compare_${mDef.key}.png`
+    a.click()
+  })
+
+  btnRow.appendChild(expandBtn)
+  btnRow.appendChild(dlBtn)
+  wrap.appendChild(btnRow)
+
+  const canvas = document.createElement('canvas')
+  wrap.appendChild(canvas)
+  area.appendChild(wrap)
+
+  groupCharts[mDef.key] = new Chart(canvas, buildConfig())
 }
 
 // Bar chart for scalar metrics (normjerk, sampentropy, rom)
@@ -784,13 +837,7 @@ function renderGroupScalarChart(area, trialSeries, mDef) {
     return 0
   })
 
-  const wrap = document.createElement('div')
-  wrap.className = 'chart-wrap mt-8'
-  const canvas = document.createElement('canvas')
-  wrap.appendChild(canvas)
-  area.appendChild(wrap)
-
-  new Chart(canvas, {
+  const buildConfig = ({ modal = false } = {}) => ({
     type: 'bar',
     data: {
       labels: trialSeries.map(t => t.name),
@@ -803,10 +850,12 @@ function renderGroupScalarChart(area, trialSeries, mDef) {
       }],
     },
     options: {
-      responsive: true, animation: false,
+      responsive: true,
+      maintainAspectRatio: !modal,
+      animation: false,
       plugins: {
         legend: { labels: { color: '#e2e8f0' } },
-        title: { display: true, text: `${mDef.label} — centroid`, color: '#e2e8f0', font: { size: 12 } },
+        title: { display: true, text: `${mDef.label} — centroid`, color: '#e2e8f0', font: { size: modal ? 15 : 12 } },
       },
       scales: {
         x: { ticks: { color: '#8892a4' }, grid: { color: '#2e3248' } },
@@ -814,6 +863,48 @@ function renderGroupScalarChart(area, trialSeries, mDef) {
       },
     },
   })
+
+  const wrap = document.createElement('div')
+  wrap.className = 'chart-wrap mt-8'
+
+  const btnRow = document.createElement('div')
+  btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;margin-bottom:4px'
+
+  const expandBtn = document.createElement('button')
+  expandBtn.className = 'btn btn-ghost btn-sm'
+  expandBtn.textContent = '⛶ Expand'
+  expandBtn.style.fontSize = '11px'
+  expandBtn.addEventListener('click', () => openModalWithConfig(buildConfig({ modal: true })))
+
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'btn btn-ghost btn-sm'
+  dlBtn.textContent = '⬇ PNG'
+  dlBtn.style.fontSize = '11px'
+  dlBtn.addEventListener('click', () => {
+    const chart = groupCharts[mDef.key]
+    if (!chart) return
+    const tmp = document.createElement('canvas')
+    tmp.width  = chart.canvas.width
+    tmp.height = chart.canvas.height
+    const tCtx = tmp.getContext('2d')
+    tCtx.fillStyle = '#1a1f2e'
+    tCtx.fillRect(0, 0, tmp.width, tmp.height)
+    tCtx.drawImage(chart.canvas, 0, 0)
+    const a = document.createElement('a')
+    a.href     = tmp.toDataURL('image/png')
+    a.download = `compare_${mDef.key}.png`
+    a.click()
+  })
+
+  btnRow.appendChild(expandBtn)
+  btnRow.appendChild(dlBtn)
+  wrap.appendChild(btnRow)
+
+  const canvas = document.createElement('canvas')
+  wrap.appendChild(canvas)
+  area.appendChild(wrap)
+
+  groupCharts[mDef.key] = new Chart(canvas, buildConfig())
 }
 
 // Summary stats table across all trials
