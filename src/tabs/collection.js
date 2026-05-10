@@ -17,6 +17,7 @@ let activeStream = null
 let mediaRecorder = null
 let recordedChunks = []
 
+let isFlipped = false
 let isRecording = false
 let trialStartTime = 0
 let trialDuration = 30
@@ -70,6 +71,7 @@ function buildUI() {
       <div class="camera-wrap" id="col-camera-wrap">
         <video id="col-video" muted playsinline></video>
         <canvas id="col-overlay"></canvas>
+        <button class="flip-btn" id="col-flip-btn" title="Mirror the camera view">⇔ Mirror</button>
         <div class="rec-badge" id="col-rec-badge"><div class="rec-dot"></div> REC</div>
         <div class="timer-display hidden" id="col-timer">0:30</div>
       </div>
@@ -264,6 +266,13 @@ function bindEvents(container) {
   // Camera
   container.querySelector('#col-start-cam').addEventListener('click', () => startCamera(container))
   container.querySelector('#col-stop-cam').addEventListener('click',  () => stopCameraFn(container))
+  container.querySelector('#col-flip-btn').addEventListener('click',  () => {
+    isFlipped = !isFlipped
+    const t = isFlipped ? 'scaleX(-1)' : ''
+    container.querySelector('#col-video').style.transform   = t
+    container.querySelector('#col-overlay').style.transform = t
+    container.querySelector('#col-flip-btn').classList.toggle('active', isFlipped)
+  })
 
   // Session
   container.querySelector('#col-new-session').addEventListener('click', () => {

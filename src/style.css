@@ -244,6 +244,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   font-style: italic; flex: 1;
 }
 
+/* ── Flip button overlay ──────────────────────────────────── */
+.flip-btn {
+  position: absolute; top: 10px; left: 10px;
+  background: rgba(0,0,0,.55); color: #fff;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; z-index: 5;
+  transition: background .2s, border-color .2s;
+  pointer-events: all;
+}
+.flip-btn:hover  { background: rgba(0,0,0,.75); }
+.flip-btn.active { background: rgba(91,127,255,.55); border-color: var(--accent); }
+
 /* ── Recording overlay ────────────────────────────────────── */
 .rec-badge {
   display: none; align-items: center; gap: 6px;
