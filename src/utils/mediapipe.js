@@ -1,6 +1,7 @@
 import {
   PoseLandmarker,
   HandLandmarker,
+  FaceLandmarker,
   FilesetResolver,
   DrawingUtils
 } from '@mediapipe/tasks-vision'
@@ -10,11 +11,13 @@ const WASM_PATH = `${import.meta.env.BASE_URL}wasm`
 const MODELS = {
   pose:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
   hands: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
+  face:  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task',
 }
 
 let _vision = null
 let _poseLandmarker = null
 let _handLandmarker = null
+let _faceLandmarker = null
 
 export async function initVision(onStatus) {
   onStatus?.('loading')
@@ -53,6 +56,21 @@ export async function loadModel(model, onStatus) {
     return _handLandmarker
   }
 
+  if (model === 'face') {
+    if (_faceLandmarker) return _faceLandmarker
+    _faceLandmarker = await FaceLandmarker.createFromOptions(_vision, {
+      baseOptions: { modelAssetPath: MODELS.face, delegate: 'CPU' },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: false,
+    })
+    return _faceLandmarker
+  }
+
   throw new Error(`Unknown model: ${model}`)
 }
 
@@ -82,6 +100,15 @@ export function detectFrame(landmarker, model, videoEl, timestampMs) {
           worldLandmarks: result.worldLandmarks?.[i] ?? null,
           handedness: result.handednesses?.[i]?.[0]?.categoryName ?? null,
         })),
+      }
+    }
+
+    if (model === 'face') {
+      const result = landmarker.detectForVideo(videoEl, timestampMs)
+      if (!result.faceLandmarks?.length) return null
+      return {
+        landmarks: result.faceLandmarks[0],
+        worldLandmarks: null,
       }
     }
   } catch (_) {
@@ -121,6 +148,31 @@ export function drawResults(ctx, result, model, canvasWidth, canvasHeight) {
         color: colors[i % 2], fillColor: '#fff', radius: 4, lineWidth: 1
       })
     })
+    return
+  }
+
+  if (model === 'face') {
+    const lms = result.landmarks
+    // Full mesh in a very subtle colour — gives the 3D structure feel
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+      { color: '#ffffff18', lineWidth: 0.5 })
+    // Feature outlines
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
+      { color: 'rgba(91,127,255,0.55)', lineWidth: 2 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+      { color: '#3ecf70bb', lineWidth: 1.5 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+      { color: '#f59e0bbb', lineWidth: 1.5 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+      { color: '#3ecf70', lineWidth: 1.5 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+      { color: '#f59e0b', lineWidth: 1.5 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_LIPS,
+      { color: '#ef4444bb', lineWidth: 1.5 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
+      { color: '#3ecf70', lineWidth: 2 })
+    drawingUtils.drawConnectors(lms, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+      { color: '#f59e0b', lineWidth: 2 })
   }
 }
 

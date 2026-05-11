@@ -14,7 +14,7 @@ let currentTrial = null
 let currentCalibration = null
 
 let activeMetrics = new Set(['speed'])
-let activeGroup   = null          // name of highlighted group chip, or null
+let activeGroups  = new Set()     // set of highlighted group chip names (supports multi-select via Shift)
 let customIndices = new Set()     // always the source of truth for which landmarks to plot
 
 let charts       = {}
@@ -185,13 +185,13 @@ function bindEvents(container) {
   })
 
   container.querySelector('#an-use-custom').addEventListener('click', () => {
-    activeGroup = null
+    activeGroups = new Set()
     container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
     renderAnalysis(container)
   })
   container.querySelector('#an-clear-custom').addEventListener('click', () => {
     customIndices.clear()
-    activeGroup = null
+    activeGroups = new Set()
     container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
     container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => cb.checked = false)
     renderAnalysis(container)
@@ -213,16 +213,15 @@ async function loadTrial(container) {
     ? await getCalibration(currentTrial.calibrationId) : null
 
   const model = currentTrial.model ?? 'pose'
-  activeGroup = Object.keys(getGroups(model))[0]
+  activeGroups = new Set([Object.keys(getGroups(model))[0]])
 
   setupGroupToggles(container, model)
   setupLandmarkCheckboxes(container, model)
 
   // Sync the initial group's indices into customIndices and check the boxes
-  const initialIndices = new Set(getGroups(model)[activeGroup]?.indices ?? [])
-  customIndices = new Set(initialIndices)
+  customIndices = groupUnion(getGroups(model))
   container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => {
-    cb.checked = initialIndices.has(parseInt(cb.dataset.idx))
+    cb.checked = customIndices.has(parseInt(cb.dataset.idx))
   })
 
   setupVideoPlayback(container)
@@ -233,27 +232,44 @@ async function loadTrial(container) {
 
 // ── Landmark group toggles ────────────────────────────────────
 
+// Returns union of indices across all currently active group names.
+function groupUnion(groups) {
+  const result = new Set()
+  for (const name of activeGroups) {
+    for (const idx of (groups[name]?.indices ?? [])) result.add(idx)
+  }
+  return result
+}
+
 function setupGroupToggles(container, model) {
   const groups = getGroups(model)
   const el = container.querySelector('#an-group-toggles')
   el.innerHTML = Object.keys(groups).map(g => `
-    <button class="toggle-chip ${g === activeGroup ? 'active' : ''}" data-group="${g}">
+    <button class="toggle-chip ${activeGroups.has(g) ? 'active' : ''}" data-group="${g}"
+            title="Click to select · Shift+click to add/remove">
       ${g}
     </button>`).join('')
 
   el.querySelectorAll('.toggle-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      el.querySelectorAll('.toggle-chip').forEach(b => b.classList.remove('active'))
-      btn.classList.add('active')
-      activeGroup = btn.dataset.group
+    btn.addEventListener('click', (e) => {
+      const name = btn.dataset.group
+      if (e.shiftKey) {
+        // Toggle this group in/out of the active set without disturbing others
+        if (activeGroups.has(name)) activeGroups.delete(name)
+        else activeGroups.add(name)
+        btn.classList.toggle('active', activeGroups.has(name))
+      } else {
+        // Normal click: exclusive selection
+        el.querySelectorAll('.toggle-chip').forEach(b => b.classList.remove('active'))
+        btn.classList.add('active')
+        activeGroups = new Set([name])
+      }
 
-      // Populate customIndices from the group and sync checkboxes
-      const groupIndices = new Set(groups[activeGroup]?.indices ?? [])
-      customIndices = new Set(groupIndices)
+      // Recompute customIndices as the union of all active groups
+      customIndices = groupUnion(groups)
       container.querySelectorAll('#an-landmark-checkboxes input').forEach(cb => {
-        cb.checked = groupIndices.has(parseInt(cb.dataset.idx))
+        cb.checked = customIndices.has(parseInt(cb.dataset.idx))
       })
-
       renderAnalysis(container)
     })
   })
@@ -272,8 +288,8 @@ function setupLandmarkCheckboxes(container, model) {
       const idx = parseInt(cb.dataset.idx)
       if (cb.checked) customIndices.add(idx)
       else customIndices.delete(idx)
-      // Deactivate group chip — user is now in custom mode
-      activeGroup = null
+      // Deactivate group chips — user is now in custom mode
+      activeGroups = new Set()
       container.querySelectorAll('#an-group-toggles .toggle-chip').forEach(b => b.classList.remove('active'))
       renderAnalysis(container)
     })
@@ -697,9 +713,8 @@ async function runGroupAnalysis(container) {
   const indices = [...customIndices].sort((a, b) => a - b)
 
   // Label describing the current landmark selection
-  const selectionLabel = activeGroup
-    ? `${activeGroup} — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
-    : `Custom selection — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
+  const groupLabel = activeGroups.size ? [...activeGroups].join(' + ') : 'Custom selection'
+  const selectionLabel = `${groupLabel} — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
 
   // Compute centroid time series per trial (no calibration — trials may differ)
   const trialColors = trials.map((_, i) => getColor(i))

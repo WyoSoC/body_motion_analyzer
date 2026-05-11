@@ -64,6 +64,7 @@ function buildUI() {
           <select id="col-model-sel">
             <option value="pose">Pose (Full Body)</option>
             <option value="hands">Hands</option>
+            <option value="face">Face</option>
           </select>
         </div>
       </div>
@@ -467,10 +468,13 @@ function friendlyError(err) {
   return err.message ?? 'Unknown error'
 }
 
+const MODEL_LABELS = { pose: 'Pose (Full Body)', hands: 'Hands', face: 'Face' }
+
 async function switchModel(container, model) {
   stopRenderLoop()
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
-  setCamOverlay(container, `⏳ Switching to ${model === 'pose' ? 'Pose (Full Body)' : 'Hands'} model…<br/><small style="color:#8892a4">First load: ~10–30 s</small>`)
+  const label = MODEL_LABELS[model] ?? model
+  setCamOverlay(container, `⏳ Switching to ${label} model…<br/><small style="color:#8892a4">First load: ~10–30 s</small>`)
   setStatus(container, 'Switching model…')
   container.querySelector('#col-start-trial').disabled = true
 
@@ -478,7 +482,7 @@ async function switchModel(container, model) {
     landmarker  = await loadModel(model)
     currentModel = model
     setCamOverlay(container, '')
-    setStatus(container, `Model switched to ${model === 'pose' ? 'Pose (Full Body)' : 'Hands'}.`)
+    setStatus(container, `Model switched to ${label}.`)
     if (currentSession) container.querySelector('#col-start-trial').disabled = false
     startRenderLoop(container)
   } catch (err) {
