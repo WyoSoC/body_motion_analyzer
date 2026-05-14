@@ -125,6 +125,16 @@ export function exportTrialCSV(trial) {
     if (model === 'pose') headers.push(`lm${i}_vis`)
   }
 
+  // Append world landmark columns when available (Pose and Hands models).
+  // World landmarks are in meters, body-centered — the 3D metric coordinate system.
+  const hasWorld = (model === 'pose' || model === 'hands') &&
+    trial.landmarkData.some(f => f.worldLandmarks?.length)
+  if (hasWorld) {
+    for (let i = 0; i < numLandmarks; i++) {
+      headers.push(`wlm${i}_x`, `wlm${i}_y`, `wlm${i}_z`)
+    }
+  }
+
   const rows = trial.landmarkData
     .filter(frame => frame.landmarks?.length === numLandmarks)
     .map(frame => {
@@ -132,6 +142,16 @@ export function exportTrialCSV(trial) {
       for (const lm of frame.landmarks) {
         row.push(lm.x.toFixed(6), lm.y.toFixed(6), lm.z.toFixed(6))
         if (model === 'pose') row.push((lm.visibility ?? 0).toFixed(4))
+      }
+      if (hasWorld) {
+        for (let i = 0; i < numLandmarks; i++) {
+          const wlm = frame.worldLandmarks?.[i]
+          row.push(
+            wlm ? wlm.x.toFixed(6) : '0',
+            wlm ? wlm.y.toFixed(6) : '0',
+            wlm ? wlm.z.toFixed(6) : '0',
+          )
+        }
       }
       return row.join(',')
     })

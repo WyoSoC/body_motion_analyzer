@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Calibration Checkerboard – 9×6 inner corners, 25 mm squares</title>
+<title>Calibration Checkerboard – 9×6 inner corners, 20 mm squares</title>
 <style>
   /* ── Print page setup ──────────────────────────────── */
   @page {
@@ -48,8 +48,8 @@
 
   /* ── Checkerboard ───────────────────────────────────── */
   /*
-     Grid: 10 columns × 7 rows of 25 mm squares
-     Total board: 250 mm × 175 mm
+     Grid: 10 columns × 7 rows of 20 mm squares
+     Total board: 200 mm × 140 mm
      Surrounded by a 2 mm white border so edge squares
      (especially white ones) are clearly visible when cut.
   */
@@ -62,13 +62,13 @@
 
   .board {
     display: grid;
-    grid-template-columns: repeat(10, 25mm);
-    grid-template-rows:    repeat(7,  25mm);
-    width:  250mm;
-    height: 175mm;
+    grid-template-columns: repeat(10, 20mm);
+    grid-template-rows:    repeat(7,  20mm);
+    width:  200mm;
+    height: 140mm;
   }
 
-  .sq { width: 25mm; height: 25mm; }
+  .sq { width: 20mm; height: 20mm; }
   .sq.b { background: #000; }
   .sq.w { background: #fff; }
 
@@ -97,7 +97,7 @@
     margin-top: 1mm;
   }
   .scale-bar-line {
-    width: 25mm;
+    width: 20mm;
     height: 2mm;
     background: linear-gradient(to right, #000 50%, #fff 50%);
     border: 0.3mm solid #666;
@@ -143,9 +143,9 @@
   <span class="title">Motion Analyzer – Calibration Checkerboard</span>
   <span class="params">
     Inner corners: <strong>9 × 6</strong> &nbsp;|&nbsp;
-    Square size: <strong>25 mm</strong> &nbsp;|&nbsp;
+    Square size: <strong>20 mm</strong> &nbsp;|&nbsp;
     Grid: 10 × 7 squares &nbsp;|&nbsp;
-    Board size: 250 × 175 mm
+    Board size: 200 × 140 mm
   </span>
 </div>
 
@@ -160,18 +160,18 @@
     <strong>How to use in Motion Analyzer → Tab 1 (Calibration):</strong>
     <ol>
       <li>Print at <strong>100% scale</strong> – do not fit to page.</li>
-      <li>Verify the scale bar (right) measures exactly 25 mm with a ruler.</li>
+      <li>Verify the scale bar (right) measures exactly 20 mm with a ruler.</li>
       <li>Place the board flat and perpendicular to the camera.</li>
-      <li>Set Inner Cols = <strong>9</strong>, Inner Rows = <strong>6</strong>, Square Size = <strong>25 mm</strong>.</li>
+      <li>Set Inner Cols = <strong>9</strong>, Inner Rows = <strong>6</strong>, Square Size = <strong>20 mm</strong>.</li>
       <li>Click 2 points that span a known number of squares, enter that count, then click Calculate.</li>
     </ol>
   </div>
   <div class="scale-ref">
     <strong>Scale verification</strong><br/>
-    The bar below should be exactly 25 mm wide:
+    The bar below should be exactly 20 mm wide:
     <div class="scale-bar">
       <div class="scale-bar-line"></div>
-      <span class="scale-bar-label">← 25 mm →</span>
+      <span class="scale-bar-label">← 20 mm →</span>
     </div>
   </div>
 </div>

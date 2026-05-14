@@ -33,38 +33,18 @@ export async function initCalibration(container) {
 
 function buildUI() {
   return `
-<div class="two-col" style="align-items:start">
+<div style="display:grid;grid-template-columns:2fr 3fr;gap:16px;align-items:start">
 
-  <!-- Left: camera preview -->
+  <!-- Left 2/5: instructions + form + list -->
   <div>
-    <div class="card">
-      <div class="card-title">Camera Preview</div>
-      <div class="form-row">
-        <label>Camera</label>
-        <select id="cal-camera-select"><option>Enumerating…</option></select>
-      </div>
-      <div class="camera-wrap calibration-wrap" id="cal-camera-wrap">
-        <video id="cal-video" muted playsinline></video>
-        <canvas id="cal-overlay"></canvas>
-        <span class="camera-label" id="cal-cam-label">No camera</span>
-        <button class="flip-btn" id="cal-flip-btn" title="Mirror the camera view">⇔ Mirror</button>
-      </div>
-      <div class="btn-group mt-8">
-        <button class="btn btn-ghost btn-sm" id="cal-start-cam">▶ Start Camera</button>
-        <button class="btn btn-ghost btn-sm" id="cal-stop-cam" disabled>■ Stop</button>
-        <button class="btn btn-ghost btn-sm" id="cal-clear-pts">✕ Clear</button>
-      </div>
-    </div>
 
     <!-- Dynamic instructions -->
     <div class="card" id="cal-instructions">
       <div class="card-title">Instructions</div>
       <div id="cal-instr-body"></div>
     </div>
-  </div>
 
-  <!-- Right: form + list -->
-  <div>
+    <!-- New Calibration Profile -->
     <div class="card">
       <div class="card-title">New Calibration Profile</div>
 
@@ -150,7 +130,31 @@ function buildUI() {
         <div class="empty-state"><div class="empty-icon">📐</div>No profiles yet.</div>
       </div>
     </div>
+
   </div>
+
+  <!-- Right 3/5: camera preview -->
+  <div>
+    <div class="card">
+      <div class="card-title">Camera Preview</div>
+      <div class="form-row">
+        <label>Camera</label>
+        <select id="cal-camera-select"><option>Enumerating…</option></select>
+      </div>
+      <div class="camera-wrap calibration-wrap" id="cal-camera-wrap">
+        <video id="cal-video" muted playsinline></video>
+        <canvas id="cal-overlay"></canvas>
+        <span class="camera-label" id="cal-cam-label">No camera</span>
+        <button class="flip-btn" id="cal-flip-btn" title="Mirror the camera view">⇔ Mirror</button>
+      </div>
+      <div class="btn-group mt-8">
+        <button class="btn btn-ghost btn-sm" id="cal-start-cam">▶ Start Camera</button>
+        <button class="btn btn-ghost btn-sm" id="cal-stop-cam" disabled>■ Stop</button>
+        <button class="btn btn-ghost btn-sm" id="cal-clear-pts">✕ Clear</button>
+      </div>
+    </div>
+  </div>
+
 </div>`
 }
 

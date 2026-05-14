@@ -23,35 +23,55 @@ function trapz(y, x) {
 
 // ── Position helpers ──────────────────────────────────────────
 
-// Returns [{t, x, y}] for a single landmark index across all frames
-// pxPerMm: optional calibration scale (if null, stay in normalized coords)
-export function extractLandmarkTimeSeries(landmarkData, lmIndex, pxPerMm = null) {
+// Returns [{t, x, y, z}] for a single landmark index across all frames.
+// useWorld=true  → reads frame.worldLandmarks (meters, body-centered; Pose & Hands only)
+// useWorld=false → reads frame.landmarks (normalized [0,1]), scales x/y/z by pxPerMm if provided
+export function extractLandmarkTimeSeries(landmarkData, lmIndex, pxPerMm = null, useWorld = false) {
   return landmarkData
-    .filter(f => f.landmarks?.[lmIndex])
+    .filter(f => useWorld
+      ? f.worldLandmarks?.[lmIndex] != null
+      : f.landmarks?.[lmIndex] != null)
     .map(f => {
-      const lm = f.landmarks[lmIndex]
+      if (useWorld) {
+        const lm = f.worldLandmarks[lmIndex]
+        return { t: f.timestamp / 1000, x: lm.x, y: lm.y, z: lm.z }
+      }
+      const lm    = f.landmarks[lmIndex]
       const scale = pxPerMm ?? 1
-      return { t: f.timestamp / 1000, x: lm.x * scale, y: lm.y * scale }
+      return { t: f.timestamp / 1000, x: lm.x * scale, y: lm.y * scale, z: lm.z * scale }
     })
 }
 
-// Centroid of a group of landmarks per frame
-export function extractGroupTimeSeries(landmarkData, indices, pxPerMm = null) {
+// Centroid of a group of landmarks per frame, with optional z.
+// useWorld=true  → uses frame.worldLandmarks (meters)
+// useWorld=false → uses frame.landmarks (normalized), scaled by pxPerMm
+export function extractGroupTimeSeries(landmarkData, indices, pxPerMm = null, useWorld = false) {
   return landmarkData
-    .filter(f => f.landmarks?.length)
+    .filter(f => useWorld ? f.worldLandmarks?.length : f.landmarks?.length)
     .map(f => {
+      if (useWorld) {
+        const valid = indices.filter(i => f.worldLandmarks?.[i] != null)
+        if (!valid.length) return null
+        const x = valid.reduce((s, i) => s + f.worldLandmarks[i].x, 0) / valid.length
+        const y = valid.reduce((s, i) => s + f.worldLandmarks[i].y, 0) / valid.length
+        const z = valid.reduce((s, i) => s + f.worldLandmarks[i].z, 0) / valid.length
+        return { t: f.timestamp / 1000, x, y, z }
+      }
       const scale = pxPerMm ?? 1
-      const valid = indices.filter(i => f.landmarks[i])
+      const valid = indices.filter(i => f.landmarks?.[i] != null)
       if (!valid.length) return null
       const x = valid.reduce((s, i) => s + f.landmarks[i].x, 0) / valid.length * scale
       const y = valid.reduce((s, i) => s + f.landmarks[i].y, 0) / valid.length * scale
-      return { t: f.timestamp / 1000, x, y }
+      const z = valid.reduce((s, i) => s + f.landmarks[i].z, 0) / valid.length * scale
+      return { t: f.timestamp / 1000, x, y, z }
     })
     .filter(Boolean)
 }
 
 // ── Core metrics ──────────────────────────────────────────────
 
+// 3D speed: Euclidean distance in x/y/z per second.
+// z defaults to 0 for series without a z field (graceful 2D→3D upgrade).
 export function computeSpeed(series) {
   if (series.length < 2) return { times: [], values: [] }
   const times = [], values = []
@@ -60,8 +80,9 @@ export function computeSpeed(series) {
     if (dt <= 0) continue
     const dx = series[i].x - series[i - 1].x
     const dy = series[i].y - series[i - 1].y
+    const dz = (series[i].z ?? 0) - (series[i - 1].z ?? 0)
     times.push((series[i].t + series[i - 1].t) / 2)
-    values.push(Math.sqrt(dx * dx + dy * dy) / dt)
+    values.push(Math.sqrt(dx * dx + dy * dy + dz * dz) / dt)
   }
   return { times, values }
 }
@@ -92,8 +113,9 @@ export function computeJerk(series) {
   return { times, values }
 }
 
-// Normalized jerk (log scale, dimensionless)
-// Ref: Teulings et al. 1997 / Hogan 1984
+// Normalized jerk (log scale, dimensionless).
+// Ref: Teulings et al. 1997 / Hogan 1984.
+// Cascades from computeJerk → automatically 3D when series has z.
 export function computeNormalizedJerk(series) {
   const jerk = computeJerk(series)
   if (jerk.times.length < 2) return null
@@ -110,7 +132,7 @@ export function computeNormalizedJerk(series) {
   return isFinite(nj) ? Math.log(nj) : null
 }
 
-// Sample Entropy — complexity measure
+// Sample Entropy — complexity measure.
 export function computeSampleEntropy(values, m = 2, r = 0.2) {
   const N = values.length
   if (N < m + 2) return null
@@ -137,17 +159,19 @@ export function computeSampleEntropy(values, m = 2, r = 0.2) {
   return -Math.log(A / B)
 }
 
-// Range of motion
+// 3D Range of motion: per-axis excursion + 3D resultant.
 export function computeROM(series) {
-  if (!series.length) return { x: 0, y: 0, resultant: 0 }
+  if (!series.length) return { x: 0, y: 0, z: 0, resultant: 0 }
   const xs = series.map(p => p.x)
   const ys = series.map(p => p.y)
+  const zs = series.map(p => p.z ?? 0)
   const romX = Math.max(...xs) - Math.min(...xs)
   const romY = Math.max(...ys) - Math.min(...ys)
-  return { x: romX, y: romY, resultant: Math.sqrt(romX ** 2 + romY ** 2) }
+  const romZ = Math.max(...zs) - Math.min(...zs)
+  return { x: romX, y: romY, z: romZ, resultant: Math.sqrt(romX ** 2 + romY ** 2 + romZ ** 2) }
 }
 
-// Summary statistics for a value array
+// Summary statistics for a value array.
 export function summarize(values) {
   if (!values.length) return {}
   const sorted = [...values].sort((a, b) => a - b)

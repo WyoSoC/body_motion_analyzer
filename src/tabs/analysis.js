@@ -12,6 +12,7 @@ import { drawStoredFrame } from '../utils/mediapipe.js'
 let allSessions = []
 let currentTrial = null
 let currentCalibration = null
+let currentUseWorld = false   // true when the loaded trial has metric world landmarks
 
 let activeMetrics = new Set(['speed'])
 let activeGroups  = new Set()     // set of highlighted group chip names (supports multi-select via Shift)
@@ -38,6 +39,11 @@ function getColor(i) {
   return i < COLOR_PALETTE.length
     ? COLOR_PALETTE[i]
     : `hsl(${(i * 137.5) % 360},75%,60%)`
+}
+
+// Returns true for models that expose metric world landmarks (Pose, Hands).
+function supportsWorldLandmarks(model) {
+  return model === 'pose' || model === 'hands'
 }
 
 export async function initAnalysis(container) {
@@ -146,10 +152,6 @@ async function loadSessions(container) {
   const sel = container.querySelector('#an-session-sel')
   sel.innerHTML = '<option value="">— Select session —</option>' +
     allSessions.map(s => `<option value="${s.id}">${s.name}</option>`).join('')
-
-  // Multi-trial select
-  const multiSel = container.querySelector('#an-multi-trial-sel')
-  // Will be populated per session
 }
 
 function bindEvents(container) {
@@ -213,6 +215,12 @@ async function loadTrial(container) {
     ? await getCalibration(currentTrial.calibrationId) : null
 
   const model = currentTrial.model ?? 'pose'
+
+  // Use world landmarks when the model supports them AND the trial actually has them.
+  // Old recordings may pre-date world-landmark storage; fall back to normalized coords.
+  currentUseWorld = supportsWorldLandmarks(model) &&
+    currentTrial.landmarkData.some(f => f.worldLandmarks?.length)
+
   activeGroups = new Set([Object.keys(getGroups(model))[0]])
 
   setupGroupToggles(container, model)
@@ -344,18 +352,26 @@ function findClosestFrame(landmarkData, ms) {
 
 // ── Analysis rendering ────────────────────────────────────────
 
+// Derive the coordinate unit label for the currently loaded trial.
+function getUnit() {
+  if (currentUseWorld) return 'm'
+  return currentCalibration ? 'mm' : 'norm'
+}
+
 function getActiveLandmarkSeries() {
   if (!currentTrial?.landmarkData?.length || !customIndices.size) return null
-  const model   = currentTrial.model ?? 'pose'
-  const pxPerMm = currentCalibration?.pxPerMm ?? null
-  const names   = getLandmarkNames(model)
+  const model  = currentTrial.model ?? 'pose'
+  const pxPerMm = currentUseWorld ? null : (currentCalibration?.pxPerMm ?? null)
+  const names  = getLandmarkNames(model)
 
   return [...customIndices]
     .sort((a, b) => a - b)
     .map(idx => ({
       idx,
       name: `${idx}: ${(names[idx] ?? `lm_${idx}`).replace(/_/g, ' ')}`,
-      series: extractLandmarkTimeSeries(currentTrial.landmarkData, idx, pxPerMm),
+      series: extractLandmarkTimeSeries(
+        currentTrial.landmarkData, idx, pxPerMm, currentUseWorld
+      ),
     }))
     .filter(item => item.series.length >= 2)
 }
@@ -377,7 +393,7 @@ function renderAnalysis(container) {
   chartDatasets = {}
   closeModal()
 
-  const unit = currentCalibration ? 'mm' : 'norm'
+  const unit = getUnit()
 
   for (const mDef of METRIC_DEFS) {
     if (!activeMetrics.has(mDef.key)) continue
@@ -578,6 +594,7 @@ function renderScalarTable(area, landmarkSeries, mDef, unit) {
         <td style="color:${color};white-space:nowrap">${name}</td>
         <td>${rom.x.toFixed(3)}</td>
         <td>${rom.y.toFixed(3)}</td>
+        <td>${rom.z.toFixed(3)}</td>
         <td>${rom.resultant.toFixed(3)}</td>
       </tr>`
     }
@@ -589,7 +606,7 @@ function renderScalarTable(area, landmarkSeries, mDef, unit) {
     }
     return `<tr>
       <td style="color:${color};white-space:nowrap">${name}</td>
-      <td colspan="3">${val != null ? val.toFixed(4) : 'N/A'}</td>
+      <td colspan="4">${val != null ? val.toFixed(4) : 'N/A'}</td>
     </tr>`
   }).join('')
 
@@ -604,8 +621,8 @@ function renderScalarTable(area, landmarkSeries, mDef, unit) {
         <thead><tr>
           <th>Landmark</th>
           ${isRom
-            ? `<th>ROM X (${unit})</th><th>ROM Y (${unit})</th><th>Resultant (${unit})</th>`
-            : `<th colspan="3">Value</th>`}
+            ? `<th>ROM X (${unit})</th><th>ROM Y (${unit})</th><th>ROM Z (${unit})</th><th>Resultant (${unit})</th>`
+            : `<th colspan="4">Value</th>`}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -630,9 +647,16 @@ function renderStats(container, landmarkSeries, unit) {
       <td>${((s.cv ?? 0) * 100).toFixed(1)}%</td>
       <td>${rom.x?.toFixed(3)  ?? '—'}</td>
       <td>${rom.y?.toFixed(3)  ?? '—'}</td>
+      <td>${rom.z?.toFixed(3)  ?? '—'}</td>
       <td>${rom.resultant?.toFixed(3) ?? '—'}</td>
     </tr>`
   }).join('')
+
+  const coordNote = currentUseWorld
+    ? '3D world coordinates (body-centered, meters)'
+    : currentCalibration
+      ? '2D normalized + estimated depth (mm scale)'
+      : '2D normalized + estimated depth'
 
   statsEl.innerHTML = `
     <div style="overflow-x:auto">
@@ -640,13 +664,14 @@ function renderStats(container, landmarkSeries, unit) {
         <thead><tr>
           <th>Landmark</th>
           <th>Mean Spd</th><th>Peak Spd</th><th>Std Dev</th><th>CV%</th>
-          <th>ROM X</th><th>ROM Y</th><th>ROM res.</th>
+          <th>ROM X</th><th>ROM Y</th><th>ROM Z</th><th>ROM res.</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
       Speed unit: ${unit}/s &nbsp;·&nbsp; ROM unit: ${unit} &nbsp;·&nbsp;
+      ${coordNote} &nbsp;·&nbsp;
       Frames: ${currentTrial.landmarkData?.length ?? 0} &nbsp;·&nbsp;
       Duration: ${currentTrial.duration?.toFixed(1) ?? '—'} s
     </div>`
@@ -663,7 +688,7 @@ function downloadStatsCsv(landmarkSeries, unit) {
     'Landmark',
     `Mean Speed (${unit}/s)`, `Peak Speed (${unit}/s)`,
     `Std Dev (${unit}/s)`, 'CV%',
-    `ROM X (${unit})`, `ROM Y (${unit})`, `ROM Resultant (${unit})`,
+    `ROM X (${unit})`, `ROM Y (${unit})`, `ROM Z (${unit})`, `ROM Resultant (${unit})`,
     'Norm. Jerk (log)', 'Sample Entropy',
   ]
 
@@ -681,6 +706,7 @@ function downloadStatsCsv(landmarkSeries, unit) {
       ((s.cv ?? 0) * 100).toFixed(2),
       rom.x?.toFixed(4)          ?? '',
       rom.y?.toFixed(4)          ?? '',
+      rom.z?.toFixed(4)          ?? '',
       rom.resultant?.toFixed(4)  ?? '',
       nj != null ? nj.toFixed(4) : '',
       se != null ? se.toFixed(4) : '',
@@ -716,13 +742,23 @@ async function runGroupAnalysis(container) {
   const groupLabel = activeGroups.size ? [...activeGroups].join(' + ') : 'Custom selection'
   const selectionLabel = `${groupLabel} — centroid of ${indices.length} landmark${indices.length > 1 ? 's' : ''}`
 
-  // Compute centroid time series per trial (no calibration — trials may differ)
+  // Compute centroid time series per trial.
+  // Use world landmarks when the individual trial supports them.
   const trialColors = trials.map((_, i) => getColor(i))
-  const trialSeries = trials.map((trial, i) => ({
-    name:   trial.name,
-    color:  trialColors[i],
-    series: extractGroupTimeSeries(trial.landmarkData ?? [], indices, null),
-  }))
+  const trialSeries = trials.map((trial, i) => {
+    const useWorld = supportsWorldLandmarks(trial.model ?? 'pose') &&
+      (trial.landmarkData ?? []).some(f => f.worldLandmarks?.length)
+    return {
+      name:     trial.name,
+      color:    trialColors[i],
+      useWorld,
+      series:   extractGroupTimeSeries(trial.landmarkData ?? [], indices, null, useWorld),
+    }
+  })
+
+  // Derive a shared unit label: 'm' if all trials use world coords, 'norm' otherwise
+  const allWorld = trialSeries.every(t => t.useWorld)
+  const groupUnit = allWorld ? 'm' : 'norm'
 
   const area = container.querySelector('#an-group-chart-area')
   area.innerHTML = ''
@@ -749,18 +785,18 @@ async function runGroupAnalysis(container) {
   for (const mDef of METRIC_DEFS) {
     if (!activeMetrics.has(mDef.key)) continue
     if (mDef.key === 'normjerk' || mDef.key === 'sampentropy' || mDef.key === 'rom') {
-      renderGroupScalarChart(area, trialSeries, mDef)
+      renderGroupScalarChart(area, trialSeries, mDef, groupUnit)
     } else {
-      renderGroupLineChart(area, trialSeries, mDef)
+      renderGroupLineChart(area, trialSeries, mDef, groupUnit)
     }
   }
 
   // Summary stats table
-  renderGroupStatsTable(area, trialSeries)
+  renderGroupStatsTable(area, trialSeries, groupUnit)
 }
 
 // Overlaid time-series line chart — one line per trial
-function renderGroupLineChart(area, trialSeries, mDef) {
+function renderGroupLineChart(area, trialSeries, mDef, groupUnit) {
   const datasets = trialSeries.map(({ name, color, series }) => {
     let result = { times: [], values: [] }
     if (mDef.key === 'speed') result = computeSpeed(series)
@@ -790,7 +826,7 @@ function renderGroupLineChart(area, trialSeries, mDef) {
       parsing: false,
       plugins: {
         legend: { labels: { color: '#e2e8f0', font: { size: modal ? 12 : 11 }, boxWidth: 12 } },
-        title: { display: true, text: `${mDef.label} (norm${mDef.unit}) — centroid`, color: '#e2e8f0', font: { size: modal ? 15 : 12 } },
+        title: { display: true, text: `${mDef.label} (${groupUnit}${mDef.unit}) — centroid`, color: '#e2e8f0', font: { size: modal ? 15 : 12 } },
       },
       scales: {
         x: { type: 'linear', ticks: { color: '#8892a4', maxTicksLimit: modal ? 15 : 10 }, grid: { color: '#2e3248' },
@@ -844,7 +880,7 @@ function renderGroupLineChart(area, trialSeries, mDef) {
 }
 
 // Bar chart for scalar metrics (normjerk, sampentropy, rom)
-function renderGroupScalarChart(area, trialSeries, mDef) {
+function renderGroupScalarChart(area, trialSeries, mDef, groupUnit) {
   const values = trialSeries.map(({ series }) => {
     if (mDef.key === 'normjerk')    return computeNormalizedJerk(series) ?? 0
     if (mDef.key === 'sampentropy') return computeSampleEntropy(computeSpeed(series).values) ?? 0
@@ -923,15 +959,18 @@ function renderGroupScalarChart(area, trialSeries, mDef) {
 }
 
 // Summary stats table across all trials
-function renderGroupStatsTable(area, trialSeries) {
-  const rows = trialSeries.map(({ name, color, series }) => {
+function renderGroupStatsTable(area, trialSeries, groupUnit) {
+  const rows = trialSeries.map(({ name, color, series, useWorld }) => {
     const speed = computeSpeed(series)
     const s   = summarize(speed.values)
     const rom = computeROM(series)
     const nj  = computeNormalizedJerk(series)
     const se  = computeSampleEntropy(speed.values)
+    const coordTag = useWorld
+      ? `<span style="font-size:9px;opacity:.6;margin-left:3px">3D</span>`
+      : `<span style="font-size:9px;opacity:.6;margin-left:3px">2D+z</span>`
     return `<tr>
-      <td style="color:${color};white-space:nowrap">${name}</td>
+      <td style="color:${color};white-space:nowrap">${name}${coordTag}</td>
       <td>${s.mean?.toFixed(3) ?? '—'}</td>
       <td>${s.max?.toFixed(3)  ?? '—'}</td>
       <td>${s.std?.toFixed(3)  ?? '—'}</td>
@@ -950,13 +989,15 @@ function renderGroupStatsTable(area, trialSeries) {
         <thead><tr>
           <th>Trial</th>
           <th>Mean Spd</th><th>Peak Spd</th><th>Std Dev</th><th>CV%</th>
-          <th>ROM res.</th><th>Norm. Jerk</th><th>Samp. Entropy</th>
+          <th>ROM res. (${groupUnit})</th><th>Norm. Jerk</th><th>Samp. Entropy</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
-      Values in normalized coordinates · centroid of selected landmarks
+      Centroid of selected landmarks &nbsp;·&nbsp;
+      3D = world coordinates (m, body-centered) &nbsp;·&nbsp;
+      2D+z = normalized coords with estimated depth
     </div>`
   area.appendChild(wrap)
 }
