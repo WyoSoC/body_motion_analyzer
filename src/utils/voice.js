@@ -33,8 +33,11 @@ export class VoiceController {
     r.maxAlternatives   = 3
 
     r.onstart = () => {
+      // Only notify on the very first activation — not on every auto-restart.
+      // Each onend→r.start() cycle would otherwise spam DOM updates.
+      const firstStart = !this._active
       this._active = true
-      this.onStatusChange?.('listening')
+      if (firstStart) this.onStatusChange?.('listening')
     }
 
     r.onend = () => {
