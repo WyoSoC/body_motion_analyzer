@@ -39,10 +39,11 @@ let _lastResult = null   // latest detectFrame result, read by 3D plot each fram
 let _3dRAF      = null
 let _3dCanvas   = null
 let _3dCtx      = null
-let _3dRotY     = 0.4   // current horizontal rotation angle (radians)
-let _3dNow      = 0     // current RAF timestamp, used for pulse animations
-let _3dSmooth   = null  // {cx, cy, cz, scale} — smoothed adaptive viewport
-let _3dRO       = null  // ResizeObserver
+let _3dRotY     = 0.4    // yaw angle (radians), user-adjustable by drag
+let _3dTilt     = -0.45  // pitch angle (radians), user-adjustable by drag
+let _3dNow      = 0      // current RAF timestamp, used for pulse animations
+let _3dSmooth   = null   // {cx, cy, cz, scale} — smoothed adaptive viewport
+let _3dRO       = null   // ResizeObserver
 
 // Document-level listeners stored so they can be removed on deactivate
 let _3dDocMouseMove = null
@@ -103,14 +104,13 @@ function _project3D(x, y, z, cx, cy, cz, scale, rotY, W, H) {
   const ly = -(y - cy) * scale   // negate: MediaPipe y increases downward
   const lz = (z - cz) * scale
 
-  // Rotate around Y axis (auto-spin)
+  // Rotate around Y axis
   const cosY = Math.cos(rotY), sinY = Math.sin(rotY)
   const rx = lx * cosY + lz * sinY
   const rz = -lx * sinY + lz * cosY
 
-  // Tilt: rotate around X axis to look from slightly above
-  const tilt = -0.45
-  const cosX = Math.cos(tilt), sinX = Math.sin(tilt)
+  // Tilt: rotate around X axis (user-controlled via vertical drag)
+  const cosX = Math.cos(_3dTilt), sinX = Math.sin(_3dTilt)
   const ry   = ly * cosX - rz * sinX
   const rz2  = ly * sinX + rz * cosX
 
@@ -306,6 +306,7 @@ function _init3DPlot(container) {
 
   const wrap    = container.querySelector('#col-3d-wrap')
   const camWrap = container.querySelector('#col-camera-wrap')
+  const dragBar = container.querySelector('#col-3d-dragbar')
   const resizeH = container.querySelector('#col-3d-resize')
 
   // Size canvas buffer to match the wrapper div
@@ -340,12 +341,13 @@ function _init3DPlot(container) {
     _3dRO.observe(wrap ?? _3dCanvas)
   }
 
-  // ── Drag to move / corner to resize ────────────────────────
-  let dragMode = null   // 'move' | 'resize'
+  // ── Interaction: move (drag-bar), rotate (canvas), resize (corner) ──
+  let dragMode = null   // 'move' | 'rotate' | 'resize'
   let ox = 0, oy = 0, startL = 0, startT = 0, startW = 0, startH = 0
+  let startRotY = 0, startTilt = 0
 
   function onStart(clientX, clientY, mode) {
-    dragMode = mode
+    dragMode  = mode
     ox = clientX; oy = clientY
     const wr = camWrap.getBoundingClientRect()
     const cr = wrap.getBoundingClientRect()
@@ -353,11 +355,15 @@ function _init3DPlot(container) {
     startT = cr.top  - wr.top
     startW = wrap.offsetWidth
     startH = wrap.offsetHeight
-    // Convert right/bottom anchoring to explicit left/top so offset math works
-    wrap.style.right  = 'auto'
-    wrap.style.bottom = 'auto'
-    wrap.style.left   = startL + 'px'
-    wrap.style.top    = startT + 'px'
+    startRotY = _3dRotY
+    startTilt  = _3dTilt
+    if (mode === 'move') {
+      wrap.style.right  = 'auto'
+      wrap.style.bottom = 'auto'
+      wrap.style.left   = startL + 'px'
+      wrap.style.top    = startT + 'px'
+    }
+    if (mode === 'rotate') _3dCanvas.style.cursor = 'grabbing'
   }
 
   function onMove(clientX, clientY) {
@@ -369,35 +375,45 @@ function _init3DPlot(container) {
       const t = Math.max(0, Math.min(wr.height - wrap.offsetHeight, startT + dy))
       wrap.style.left = l + 'px'
       wrap.style.top  = t + 'px'
+    } else if (dragMode === 'rotate') {
+      _3dRotY = startRotY + dx * 0.008
+      _3dTilt = Math.max(-1.3, Math.min(0.2, startTilt + dy * 0.006))
     } else {
       wrap.style.width  = Math.min(Math.max(100, startW + dx), wr.width  - startL) + 'px'
       wrap.style.height = Math.min(Math.max(70,  startH + dy), wr.height - startT) + 'px'
     }
   }
 
-  wrap.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY, 'move');   e.preventDefault() })
-  resizeH?.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY, 'resize'); e.preventDefault(); e.stopPropagation() })
+  function onEnd() {
+    dragMode = null
+    _3dCanvas.style.cursor = 'grab'
+  }
 
-  wrap.addEventListener('touchstart', e => { onStart(e.touches[0].clientX, e.touches[0].clientY, 'move');   e.preventDefault() }, { passive: false })
+  // drag-bar → move overlay
+  dragBar?.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY, 'move'); e.preventDefault(); e.stopPropagation() })
+  dragBar?.addEventListener('touchstart', e => { onStart(e.touches[0].clientX, e.touches[0].clientY, 'move'); e.preventDefault(); e.stopPropagation() }, { passive: false })
+
+  // canvas → orbit/rotate view
+  _3dCanvas.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY, 'rotate'); e.preventDefault() })
+  _3dCanvas.addEventListener('touchstart', e => { onStart(e.touches[0].clientX, e.touches[0].clientY, 'rotate'); e.preventDefault() }, { passive: false })
+
+  // resize handle → resize overlay
+  resizeH?.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY, 'resize'); e.preventDefault(); e.stopPropagation() })
   resizeH?.addEventListener('touchstart', e => { onStart(e.touches[0].clientX, e.touches[0].clientY, 'resize'); e.preventDefault(); e.stopPropagation() }, { passive: false })
 
   _3dDocMouseMove = e => onMove(e.clientX, e.clientY)
-  _3dDocMouseUp   = () => { dragMode = null }
+  _3dDocMouseUp   = onEnd
   _3dDocTouchMove = e => { if (dragMode) { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault() } }
-  _3dDocTouchEnd  = () => { dragMode = null }
+  _3dDocTouchEnd  = onEnd
 
   document.addEventListener('mousemove', _3dDocMouseMove)
   document.addEventListener('mouseup',   _3dDocMouseUp)
   document.addEventListener('touchmove', _3dDocTouchMove, { passive: false })
   document.addEventListener('touchend',  _3dDocTouchEnd)
 
-  let lastTs = 0
   const loop = (ts) => {
     _3dRAF = requestAnimationFrame(loop)
     _3dNow = ts
-    const dt = Math.min((ts - lastTs) / 1000, 0.05)
-    lastTs = ts
-    _3dRotY += 0.22 * dt
     _draw3DScene()
   }
   _3dRAF = requestAnimationFrame(loop)
@@ -557,16 +573,28 @@ function buildUI() {
         <video id="col-video" muted playsinline></video>
         <canvas id="col-overlay"></canvas>
 
-        <!-- 3D landmark overlay: drag body to move, drag corner handle to resize -->
+        <!-- 3D landmark overlay: drag-bar to move, canvas to rotate, corner to resize -->
         <div id="col-3d-wrap" style="
           position:absolute;top:8px;right:8px;
           min-width:100px;min-height:70px;
           border-radius:8px;overflow:hidden;
           border:1px solid rgba(91,127,255,0.25);
-          cursor:move;z-index:3;user-select:none">
+          z-index:3;user-select:none">
+          <!-- thin grab-bar at top for repositioning the overlay -->
+          <div id="col-3d-dragbar" style="
+            position:absolute;top:0;left:0;right:0;height:14px;
+            cursor:move;z-index:5;
+            background:rgba(13,17,23,0.72);
+            display:flex;align-items:center;justify-content:center;gap:3px">
+            <div style="width:22px;height:2px;border-radius:1px;background:rgba(91,127,255,0.45)"></div>
+            <span style="font-size:8px;color:rgba(91,127,255,0.5);letter-spacing:.04em;line-height:1">3D</span>
+            <div style="width:22px;height:2px;border-radius:1px;background:rgba(91,127,255,0.45)"></div>
+          </div>
+          <!-- canvas — drag to orbit (left/right = yaw, up/down = pitch) -->
           <canvas id="col-3d-canvas" style="
             width:100%;height:100%;display:block;
-            pointer-events:none"></canvas>
+            cursor:grab;pointer-events:auto"></canvas>
+          <!-- resize handle -->
           <div id="col-3d-resize" style="
             position:absolute;bottom:0;right:0;width:20px;height:20px;
             cursor:se-resize;z-index:4;
@@ -593,19 +621,21 @@ function buildUI() {
         display:flex;align-items:center;gap:10px;
         padding:10px 14px;border-radius:var(--radius);
         background:var(--surface2);border:1px solid var(--border);
-        margin-bottom:10px">
-        <span id="col-voice-mic" style="font-size:22px;line-height:1">🎙️</span>
-        <div style="flex:1;min-width:0">
-          <div id="col-voice-command-hint" style="font-size:12px;font-weight:700;color:var(--text-muted)">
+        margin-bottom:10px;overflow:hidden">
+        <span id="col-voice-mic" style="font-size:22px;line-height:1;flex-shrink:0">🎙️</span>
+        <div style="flex:1;min-width:0;overflow:hidden">
+          <div id="col-voice-command-hint" style="
+            font-size:12px;font-weight:700;color:var(--text-muted);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
             Voice off
           </div>
           <div id="col-voice-interim" style="
             font-size:11px;color:var(--accent);font-style:italic;
             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-            min-height:15px;margin-top:2px">
+            height:15px;margin-top:2px">
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm" id="col-voice-toggle">Enable</button>
+        <button class="btn btn-ghost btn-sm" id="col-voice-toggle" style="flex-shrink:0">Enable</button>
       </div>
 
       <div id="col-voice-cmds" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
@@ -629,7 +659,7 @@ function buildUI() {
         </div>
       </div>
 
-      <div style="font-size:11px;color:var(--text-muted)">
+      <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
         Last heard: <span id="col-voice-last" style="color:var(--text);font-style:italic">—</span>
       </div>
     </div>
