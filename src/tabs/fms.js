@@ -1,60 +1,44 @@
-import {
-  listCameras, listCamerasAfterPermission,
-  openCamera, stopCamera, loadModel, detectFrame, drawResults,
-} from '../utils/mediapipe.js'
+import { getAllSessions, getTrialsBySession, getTrial } from '../db.js'
 import {
   scoreDeepSquat, scoreHurdleStep,
-  toFMS, scoreColor, angle3pt, PhaseDetector,
+  toFMS, scoreColor,
 } from '../utils/fms_scoring.js'
 
 // ── Module state ──────────────────────────────────────────────
 
-let cameras   = []
-let videoEl   = null
-let canvas    = null
-let ctx       = null
-let landmarker = null
-let rafId     = null
-let activeStream = null
-let isFlipped = false
-
-let selectedTest   = 'deep-squat'     // 'deep-squat' | 'hurdle-step'
-let steppingLeg    = 'left'           // 'left' | 'right'
-
-// Running scores: live (current frame) and peak (best since last reset)
-let liveResult  = null
-let peakResult  = null
-let phaseDetector = null
+let selectedTest = 'deep-squat'
+let steppingLeg  = 'left'
 
 // ── Entry point ───────────────────────────────────────────────
 
 export async function initFMS(container) {
   container.innerHTML = buildUI()
-  mountRefs(container)
-  await populateCameras(container)
   bindEvents(container)
-  phaseDetector = new PhaseDetector(selectedTest)
-  renderScores(container, null, null)
+  await loadSessions(container)
 }
 
-export function deactivateFMS() {
-  stopLoop()
-  stopCamera(videoEl)
-  activeStream = null
-}
+export function deactivateFMS() {}
 
 // ── UI builder ────────────────────────────────────────────────
 
 function buildUI() {
   return `
-<div style="display:grid;grid-template-columns:2fr 3fr;gap:16px;align-items:start">
+<div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;align-items:start">
 
-  <!-- Left panel: controls + scoring -->
+  <!-- Left panel: trial picker + controls -->
   <div>
-
-    <!-- Test setup -->
     <div class="card">
-      <div class="card-title">FMS Assessment</div>
+      <div class="card-title">FMS Analysis</div>
+
+      <div class="form-row">
+        <label>Session</label>
+        <select id="fms-session-sel"><option value="">— select session —</option></select>
+      </div>
+
+      <div class="form-row">
+        <label>Trial</label>
+        <select id="fms-trial-sel" disabled><option value="">— select trial —</option></select>
+      </div>
 
       <div class="form-row">
         <label>Movement Test</label>
@@ -64,7 +48,6 @@ function buildUI() {
         </div>
       </div>
 
-      <!-- Hurdle step: which leg is stepping -->
       <div id="fms-leg-row" class="form-row hidden">
         <label>Stepping Leg</label>
         <div class="toggle-group" id="fms-leg-toggle">
@@ -73,61 +56,45 @@ function buildUI() {
         </div>
       </div>
 
-      <div class="form-row">
-        <label>Camera</label>
-        <select id="fms-cam-select"></select>
+      <div class="btn-group mt-8">
+        <button class="btn btn-primary btn-sm" id="fms-analyze-btn" disabled>Analyze</button>
       </div>
 
-      <div class="btn-group mt-8">
-        <button class="btn btn-primary btn-sm" id="fms-start-btn">▶ Start Camera</button>
-        <button class="btn btn-ghost btn-sm"   id="fms-stop-btn"  disabled>■ Stop</button>
-        <button class="btn btn-ghost btn-sm"   id="fms-flip-btn"  title="Mirror view">⇔</button>
-        <button class="btn btn-ghost btn-sm"   id="fms-reset-btn" title="Reset peak score">↺ Reset Peak</button>
+      <div id="fms-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">
+        Select a session and trial to begin.
       </div>
     </div>
 
     <!-- Instructions -->
-    <div class="card" id="fms-instructions">
-      <div class="card-title">Instructions</div>
-      <div id="fms-instr-body"></div>
+    <div class="card">
+      <div class="card-title">How it works</div>
+      <p style="font-size:12.5px;color:var(--text-muted);line-height:1.7;margin:0">
+        FMS scores are computed from the pose landmark data saved during
+        Data Collection. Select a trial recorded with the Pose model,
+        choose the movement test, then click <strong>Analyze</strong>.
+        The peak score (best frame) and a score timeline will appear on the right.
+      </p>
     </div>
+  </div>
 
-    <!-- Live + Peak scores -->
+  <!-- Right panel: results -->
+  <div id="fms-results" style="display:none">
+
+    <!-- Peak score -->
     <div class="card" id="fms-score-card">
-      <div class="card-title">Scores</div>
+      <div class="card-title">Peak Score</div>
 
-      <!-- Phase indicator -->
-      <div id="fms-phase" style="
-        font-size:11px;color:var(--text-muted);
-        padding:4px 10px;border-radius:20px;
-        background:var(--surface2);border:1px solid var(--border);
-        display:inline-block;margin-bottom:12px">
-        Start camera to begin
-      </div>
-
-      <!-- Overall scores side by side -->
-      <div style="display:flex;gap:12px;margin-bottom:14px">
-        <div style="flex:1;text-align:center">
-          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">Live</div>
-          <div id="fms-live-score" style="font-size:42px;font-weight:700;line-height:1;color:var(--text-muted)">—</div>
-          <div id="fms-live-fms" style="font-size:11px;color:var(--text-muted);margin-top:3px">FMS —</div>
+      <div style="display:flex;gap:20px;align-items:center;margin-bottom:14px">
+        <div style="text-align:center">
+          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-peak-num" >—</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="fms-peak-fms">FMS —</div>
         </div>
-        <div style="width:1px;background:var(--border)"></div>
-        <div style="flex:1;text-align:center">
-          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">Peak</div>
-          <div id="fms-peak-score" style="font-size:42px;font-weight:700;line-height:1;color:var(--text-muted)">—</div>
-          <div id="fms-peak-fms" style="font-size:11px;color:var(--text-muted);margin-top:3px">FMS —</div>
+        <div style="flex:1">
+          <div id="fms-criteria"></div>
         </div>
       </div>
 
-      <!-- Criteria breakdown (peak) -->
-      <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">
-        Criterion Breakdown (Peak)
-      </div>
-      <div id="fms-criteria"></div>
-
-      <!-- Fine-grain comparison note -->
-      <div style="margin-top:10px;font-size:10.5px;color:var(--text-muted);line-height:1.5">
+      <div style="font-size:10.5px;color:var(--text-muted);line-height:1.5">
         Score is continuous 0–100 (finer than FMS 0–3).
         <strong>67+</strong> = FMS&nbsp;3 &nbsp;·&nbsp;
         <strong>34–66</strong> = FMS&nbsp;2 &nbsp;·&nbsp;
@@ -135,60 +102,41 @@ function buildUI() {
       </div>
     </div>
 
-  </div>
-
-  <!-- Right panel: camera -->
-  <div>
+    <!-- Score over time -->
     <div class="card">
-      <div class="card-title">Camera Preview</div>
-      <div class="camera-wrap" id="fms-cam-wrap">
-        <video id="fms-video" muted playsinline></video>
-        <canvas id="fms-canvas"></canvas>
-        <span class="camera-label" id="fms-cam-label">No camera</span>
-      </div>
-      <div style="margin-top:8px;font-size:11px;color:var(--text-muted)">
-        Position subject so the full body is visible.
-        For Deep Squat: front or 45° view.
-        For Hurdle Step: front or side view.
+      <div class="card-title">Score Over Time</div>
+      <svg id="fms-chart" width="100%" height="160"
+        style="display:block;border-radius:6px;background:var(--surface2)">
+      </svg>
+      <div style="margin-top:6px;font-size:10.5px;color:var(--text-muted)">
+        Each point = one recorded frame. Dashed lines: FMS 3 threshold (67) and FMS 2 threshold (34).
       </div>
     </div>
+
+  </div>
+
+  <!-- Placeholder when no results yet -->
+  <div id="fms-empty" style="display:flex;align-items:center;justify-content:center;
+    height:300px;color:var(--text-muted);font-size:13px;text-align:center">
+    Select a trial and click Analyze to see results.
   </div>
 
 </div>`
 }
 
-// ── Mount refs ────────────────────────────────────────────────
-
-function mountRefs(container) {
-  videoEl = container.querySelector('#fms-video')
-  canvas  = container.querySelector('#fms-canvas')
-  ctx     = canvas.getContext('2d')
-
-  videoEl.addEventListener('loadedmetadata', () => {
-    canvas.width  = videoEl.videoWidth
-    canvas.height = videoEl.videoHeight
-  })
-}
-
-async function populateCameras(container) {
-  cameras = await listCameras()
-  const sel = container.querySelector('#fms-cam-select')
-  sel.innerHTML = cameras.length
-    ? cameras.map(c => `<option value="${c.deviceId}">${c.label}</option>`).join('')
-    : '<option value="">No cameras found</option>'
-}
-
 // ── Events ────────────────────────────────────────────────────
 
 function bindEvents(container) {
-  container.querySelector('#fms-start-btn').addEventListener('click', () => startCamera(container))
-  container.querySelector('#fms-stop-btn').addEventListener('click',  () => stopCameraFn(container))
-  container.querySelector('#fms-flip-btn').addEventListener('click',  () => toggleFlip(container))
-  container.querySelector('#fms-reset-btn').addEventListener('click', () => {
-    peakResult = null
-    phaseDetector?.reset()
-    renderScores(container, liveResult, null)
+  container.querySelector('#fms-session-sel').addEventListener('change', async e => {
+    await loadTrials(container, Number(e.target.value))
   })
+
+  container.querySelector('#fms-trial-sel').addEventListener('change', e => {
+    const ok = !!e.target.value
+    container.querySelector('#fms-analyze-btn').disabled = !ok
+  })
+
+  container.querySelector('#fms-analyze-btn').addEventListener('click', () => analyze(container))
 
   container.querySelectorAll('[data-test]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -196,9 +144,6 @@ function bindEvents(container) {
       container.querySelectorAll('[data-test]').forEach(b =>
         b.classList.toggle('active', b.dataset.test === selectedTest))
       container.querySelector('#fms-leg-row').classList.toggle('hidden', selectedTest !== 'hurdle-step')
-      peakResult = null
-      phaseDetector = new PhaseDetector(selectedTest)
-      setInstructions(container)
     })
   })
 
@@ -207,291 +152,193 @@ function bindEvents(container) {
       steppingLeg = btn.dataset.leg
       container.querySelectorAll('[data-leg]').forEach(b =>
         b.classList.toggle('active', b.dataset.leg === steppingLeg))
-      peakResult = null
     })
   })
-
-  setInstructions(container)
 }
 
-function setInstructions(container) {
-  const body = container.querySelector('#fms-instr-body')
-  if (selectedTest === 'deep-squat') {
-    body.innerHTML = `
-      <ol style="padding-left:16px;line-height:2;font-size:13px;color:var(--text-muted)">
-        <li>Stand 2–3 m from the camera, full body visible.</li>
-        <li>Hold a dowel (or arms) overhead, feet shoulder-width apart.</li>
-        <li>Squat as deep as possible while keeping heels flat.</li>
-        <li>Hold the bottom briefly, then stand back up.</li>
-      </ol>
-      <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-        <strong>Peak score</strong> auto-captures at the deepest point.
-        Repeat for a better score; click ↺&nbsp;Reset Peak to clear.
-      </p>`
-  } else {
-    body.innerHTML = `
-      <ol style="padding-left:16px;line-height:2;font-size:13px;color:var(--text-muted)">
-        <li>Stand on one foot, hold a dowel (or arms) across shoulders.</li>
-        <li>Step over an imaginary hurdle set at your tibial tuberosity height.</li>
-        <li>Touch the heel lightly to the floor in front, then return.</li>
-        <li>Select which leg is stepping above.</li>
-      </ol>
-      <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-        <strong>Peak score</strong> auto-captures at the highest step point.
-      </p>`
+// ── Data loading ──────────────────────────────────────────────
+
+async function loadSessions(container) {
+  const sessions = await getAllSessions()
+  const sel = container.querySelector('#fms-session-sel')
+  if (!sessions.length) {
+    sel.innerHTML = '<option value="">No sessions found</option>'
+    return
   }
-}
-
-// ── Camera ────────────────────────────────────────────────────
-
-async function startCamera(container) {
-  const sel      = container.querySelector('#fms-cam-select')
-  const deviceId = sel.value
-
-  if (!landmarker) {
-    setPhase(container, 'Loading MediaPipe pose model…')
-    try { landmarker = await loadModel('pose') }
-    catch (err) { setPhase(container, 'Model load failed — reload page'); return }
-  }
-
-  try {
-    activeStream = await openCamera(deviceId, videoEl)
-    cameras = await listCamerasAfterPermission()
-    const activeId = activeStream.getVideoTracks()[0]?.getSettings?.()?.deviceId ?? ''
-    sel.innerHTML = cameras.map(c =>
-      `<option value="${c.deviceId}" ${c.deviceId === activeId ? 'selected' : ''}>${c.label}</option>`
+  sel.innerHTML = '<option value="">— select session —</option>' +
+    sessions.map(s =>
+      `<option value="${s.id}">${s.name} (${new Date(s.date).toLocaleDateString()})</option>`
     ).join('')
-    container.querySelector('#fms-cam-label').textContent =
-      cameras.find(c => c.deviceId === activeId)?.label ?? 'Camera'
-    container.querySelector('#fms-start-btn').disabled = true
-    container.querySelector('#fms-stop-btn').disabled  = false
-    startLoop(container)
-    setPhase(container, 'Detecting pose…')
-  } catch (err) {
-    alert(`Camera error: ${err.message}`)
-  }
 }
 
-function stopCameraFn(container) {
-  stopLoop()
-  stopCamera(videoEl)
-  activeStream = null
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  container.querySelector('#fms-start-btn').disabled = false
-  container.querySelector('#fms-stop-btn').disabled  = true
-  setPhase(container, 'Camera stopped')
-}
+async function loadTrials(container, sessionId) {
+  const trialSel = container.querySelector('#fms-trial-sel')
+  const analyzeBtn = container.querySelector('#fms-analyze-btn')
 
-function toggleFlip(container) {
-  isFlipped = !isFlipped
-  const t = isFlipped ? 'scaleX(-1)' : ''
-  videoEl.style.transform = t
-  canvas.style.transform  = t
-  container.querySelector('#fms-flip-btn').classList.toggle('active', isFlipped)
-}
-
-// ── Render loop ───────────────────────────────────────────────
-
-function startLoop(container) {
-  stopLoop()
-  function loop(ts) {
-    rafId = requestAnimationFrame(loop)
-    const result = detectFrame(landmarker, 'pose', videoEl, ts)
-    if (!result) return
-
-    // Draw skeleton
-    drawResults(ctx, result, 'pose', canvas.width, canvas.height)
-
-    const wlm = result.worldLandmarks
-    if (!wlm) return
-
-    // Compute live score
-    liveResult = selectedTest === 'deep-squat'
-      ? scoreDeepSquat(wlm)
-      : scoreHurdleStep(wlm, steppingLeg)
-
-    // Phase detection
-    const { phase } = phaseDetector.update(wlm, steppingLeg)
-
-    // Auto-capture peak score at the key phase
-    const isPeak = (selectedTest === 'deep-squat' && phase === 'bottom') ||
-                   (selectedTest === 'hurdle-step' && phase === 'peak')
-
-    if (isPeak && (!peakResult || liveResult.total >= peakResult.total)) {
-      peakResult = { ...liveResult }
-    }
-
-    // Annotate canvas
-    drawAnnotations(result.landmarks, wlm, liveResult, canvas.width, canvas.height)
-
-    // Update score display
-    renderScores(container, liveResult, peakResult)
-    setPhase(container, phaseLabel(phase))
-  }
-  rafId = requestAnimationFrame(loop)
-}
-
-function stopLoop() {
-  if (rafId) { cancelAnimationFrame(rafId); rafId = null }
-}
-
-// ── Canvas annotations ────────────────────────────────────────
-//
-// Draws colored joint highlights and key angle labels on top of the skeleton.
-
-const JOINT_PAIRS = {
-  'deep-squat': [
-    // [lm index, label suffix, related criterion index]
-    [25, 'L knee', 2], [26, 'R knee', 2],
-    [23, 'L hip',  0], [24, 'R hip',  0],
-  ],
-  'hurdle-step': [
-    [25, 'L knee', 2], [26, 'R knee', 2],
-    [23, 'L hip',  1], [24, 'R hip',  1],
-  ],
-}
-
-function drawAnnotations(normLm, wlm, result, cw, ch) {
-  if (!result) return
-  const crit = result.criteria
-
-  // Helper: convert normalized landmark to canvas px
-  const px = i => ({ x: normLm[i].x * cw, y: normLm[i].y * ch })
-
-  // Trunk-tibia angle label (deep squat) at mid-hip
-  if (selectedTest === 'deep-squat') {
-    const mhip = {
-      x: (normLm[23].x + normLm[24].x) / 2 * cw,
-      y: (normLm[23].y + normLm[24].y) / 2 * ch,
-    }
-    drawLabel(ctx, crit[1].detail, mhip.x + 12, mhip.y - 8, scoreColor(crit[1].score))
+  if (!sessionId) {
+    trialSel.innerHTML = '<option value="">— select trial —</option>'
+    trialSel.disabled = true
+    analyzeBtn.disabled = true
+    return
   }
 
-  // Step height label (hurdle step) at stepping knee
-  if (selectedTest === 'hurdle-step') {
-    const kIdx = steppingLeg === 'left' ? 25 : 26
-    const k = px(kIdx)
-    drawLabel(ctx, crit[0].detail, k.x + 12, k.y - 8, scoreColor(crit[0].score))
+  const trials = await getTrialsBySession(sessionId)
+  const poseTrials = trials.filter(t => t.model === 'pose' && t.landmarkData?.length)
+
+  if (!poseTrials.length) {
+    trialSel.innerHTML = '<option value="">No pose trials in this session</option>'
+    trialSel.disabled = true
+    analyzeBtn.disabled = true
+    return
   }
 
-  // Knee alignment labels
-  const kL = px(25), kR = px(26)
-  drawLabel(ctx, `${crit[2].score}`, kL.x - 22, kL.y,  scoreColor(crit[2].score))
-  drawLabel(ctx, `${crit[2].score}`, kR.x + 8,  kR.y,  scoreColor(crit[2].score))
-
-  // Overall score badge — top-left corner
-  const sc = result.total
-  ctx.save()
-  ctx.fillStyle = scoreColor(sc) + '22'
-  roundRect(ctx, 10, 10, 80, 46, 8)
-  ctx.fill()
-  ctx.fillStyle = scoreColor(sc)
-  ctx.font = 'bold 26px system-ui, sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText(sc, 50, 38)
-  ctx.font = '10px system-ui, sans-serif'
-  ctx.fillText(`FMS ${result.fmsEquiv}`, 50, 50)
-  ctx.textAlign = 'left'
-  ctx.restore()
+  trialSel.innerHTML = '<option value="">— select trial —</option>' +
+    poseTrials.map(t =>
+      `<option value="${t.id}">${t.name} (${t.landmarkData.length} frames, ${t.duration?.toFixed(1) ?? '?'}s)</option>`
+    ).join('')
+  trialSel.disabled = false
+  analyzeBtn.disabled = true
 }
 
-function drawLabel(c, text, x, y, color) {
-  c.save()
-  c.font = 'bold 11px system-ui, sans-serif'
-  c.fillStyle = color
-  c.strokeStyle = '#00000099'
-  c.lineWidth = 3
-  c.strokeText(text, x, y)
-  c.fillText(text, x, y)
-  c.restore()
-}
+// ── Analysis ──────────────────────────────────────────────────
 
-function roundRect(c, x, y, w, h, r) {
-  c.beginPath()
-  c.moveTo(x + r, y)
-  c.lineTo(x + w - r, y)
-  c.quadraticCurveTo(x + w, y, x + w, y + r)
-  c.lineTo(x + w, y + h - r)
-  c.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  c.lineTo(x + r, y + h)
-  c.quadraticCurveTo(x, y + h, x, y + h - r)
-  c.lineTo(x, y + r)
-  c.quadraticCurveTo(x, y, x + r, y)
-  c.closePath()
-}
+async function analyze(container) {
+  const trialId = Number(container.querySelector('#fms-trial-sel').value)
+  if (!trialId) return
 
-// ── Score display ─────────────────────────────────────────────
+  const statusEl = container.querySelector('#fms-status')
+  statusEl.textContent = 'Analyzing…'
 
-function renderScores(container, live, peak) {
-  const liveScoreEl = container.querySelector('#fms-live-score')
-  const liveFmsEl   = container.querySelector('#fms-live-fms')
-  const peakScoreEl = container.querySelector('#fms-peak-score')
-  const peakFmsEl   = container.querySelector('#fms-peak-fms')
-  const criteriaEl  = container.querySelector('#fms-criteria')
+  const trial = await getTrial(trialId)
+  const frames = trial.landmarkData.filter(f => f.worldLandmarks?.length === 33)
 
-  if (live) {
-    liveScoreEl.textContent = live.total
-    liveScoreEl.style.color = scoreColor(live.total)
-    liveFmsEl.textContent   = `FMS ${live.fmsEquiv}`
-    liveFmsEl.style.color   = scoreColor(live.total)
-  } else {
-    liveScoreEl.textContent = '—'
-    liveScoreEl.style.color = 'var(--text-muted)'
-    liveFmsEl.textContent   = 'FMS —'
-    liveFmsEl.style.color   = 'var(--text-muted)'
+  if (!frames.length) {
+    statusEl.textContent = 'No valid pose frames found in this trial.'
+    return
   }
 
-  const displayResult = peak ?? live
-  if (displayResult) {
-    peakScoreEl.textContent = displayResult.total
-    peakScoreEl.style.color = scoreColor(displayResult.total)
-    peakFmsEl.textContent   = `FMS ${displayResult.fmsEquiv}`
-    peakFmsEl.style.color   = scoreColor(displayResult.total)
-    renderCriteria(criteriaEl, displayResult.criteria)
-  } else {
-    peakScoreEl.textContent = '—'
-    peakScoreEl.style.color = 'var(--text-muted)'
-    peakFmsEl.textContent   = 'FMS —'
-    peakFmsEl.style.color   = 'var(--text-muted)'
-    criteriaEl.innerHTML    = ''
-  }
+  const scores = frames.map(f => {
+    const result = selectedTest === 'deep-squat'
+      ? scoreDeepSquat(f.worldLandmarks)
+      : scoreHurdleStep(f.worldLandmarks, steppingLeg)
+    return { ts: f.timestamp, result }
+  })
+
+  const peakEntry = scores.reduce((best, s) =>
+    s.result.total > best.result.total ? s : best
+  )
+
+  statusEl.textContent = `${frames.length} frames analyzed. Peak at ${(peakEntry.ts / 1000).toFixed(2)}s.`
+
+  renderResults(container, scores, peakEntry.result)
 }
 
-function renderCriteria(el, criteria) {
-  el.innerHTML = criteria.map(c => {
-    const color = scoreColor(c.score)
-    const pct   = c.score
+// ── Rendering ──────────────────────────────────────────────────
+
+function renderResults(container, scores, peak) {
+  container.querySelector('#fms-results').style.display = ''
+  container.querySelector('#fms-empty').style.display   = 'none'
+
+  // Peak score
+  const color = scoreColor(peak.total)
+  const numEl = container.querySelector('#fms-peak-num')
+  numEl.textContent  = peak.total
+  numEl.style.color  = color
+  const fmsEl = container.querySelector('#fms-peak-fms')
+  fmsEl.textContent = `FMS ${peak.fmsEquiv}`
+  fmsEl.style.color = color
+
+  // Criteria breakdown
+  const criteriaEl = container.querySelector('#fms-criteria')
+  criteriaEl.innerHTML = peak.criteria.map(c => {
+    const col = scoreColor(c.score)
     return `
     <div style="margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
         <span style="font-size:12px;font-weight:600">${c.name}</span>
-        <span style="font-size:12px;color:${color};font-weight:700">${c.score}
-          <span style="font-size:10px;font-weight:400;color:var(--text-muted)">/ 100</span>
+        <span style="font-size:12px;color:${col};font-weight:700">${c.score}
+          <span style="font-size:10px;font-weight:400;color:var(--text-muted)">/100</span>
         </span>
       </div>
       <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden">
-        <div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width .15s"></div>
+        <div style="height:100%;width:${c.score}%;background:${col};border-radius:3px"></div>
       </div>
       <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${c.detail} — ${c.description}</div>
     </div>`
   }).join('')
+
+  // Score timeline chart
+  drawChart(container.querySelector('#fms-chart'), scores)
 }
 
-function setPhase(container, text) {
-  const el = container.querySelector('#fms-phase')
-  if (el) el.textContent = text
-}
+function drawChart(svg, scores) {
+  const W = svg.clientWidth || 600
+  const H = 160
+  const PAD = { top: 12, right: 12, bottom: 20, left: 36 }
+  const cw = W - PAD.left - PAD.right
+  const ch = H - PAD.top  - PAD.bottom
 
-function phaseLabel(phase) {
-  const labels = {
-    waiting:   'Waiting for movement…',
-    standing:  'Standing',
-    descending:'Descending ↓',
-    bottom:    '★ Bottom — peak captured',
-    ascending: 'Ascending ↑',
-    lifting:   'Lifting leg ↑',
-    peak:      '★ Peak step — captured',
-    returning: 'Returning ↓',
-  }
-  return labels[phase] ?? phase
+  const totals = scores.map(s => s.result.total)
+  const maxTs  = scores[scores.length - 1]?.ts || 1
+
+  const xScale = ts => PAD.left + (ts / maxTs) * cw
+  const yScale = v  => PAD.top  + ch - (v / 100) * ch
+
+  // Build polyline points
+  const pts = scores.map(s => `${xScale(s.ts).toFixed(1)},${yScale(s.result.total).toFixed(1)}`).join(' ')
+
+  // Color segments by score (simple approach: single colored line with inline style)
+  // Use an area fill under the curve
+  const areaStart = `${xScale(scores[0].ts).toFixed(1)},${yScale(0).toFixed(1)}`
+  const areaEnd   = `${xScale(scores[scores.length-1].ts).toFixed(1)},${yScale(0).toFixed(1)}`
+  const areaPath  = `M ${areaStart} L ${pts.replace(/^[^ ]+/, '')} L ${areaEnd} Z`
+
+  const y67 = yScale(67).toFixed(1)
+  const y34 = yScale(34).toFixed(1)
+  const midScore = totals.reduce((a, b) => a + b, 0) / totals.length
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="fms-grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${scoreColor(midScore)}" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="${scoreColor(midScore)}" stop-opacity="0.03"/>
+      </linearGradient>
+    </defs>
+
+    <!-- Y-axis -->
+    <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + ch}"
+      stroke="var(--border)" stroke-width="1"/>
+
+    <!-- Threshold lines -->
+    <line x1="${PAD.left}" y1="${y67}" x2="${PAD.left + cw}" y2="${y67}"
+      stroke="#3ecf70" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
+    <text x="${PAD.left - 4}" y="${y67}" fill="#3ecf70" font-size="9" text-anchor="end"
+      dominant-baseline="middle" opacity="0.8">67</text>
+
+    <line x1="${PAD.left}" y1="${y34}" x2="${PAD.left + cw}" y2="${y34}"
+      stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
+    <text x="${PAD.left - 4}" y="${y34}" fill="#f59e0b" font-size="9" text-anchor="end"
+      dominant-baseline="middle" opacity="0.8">34</text>
+
+    <!-- X baseline -->
+    <line x1="${PAD.left}" y1="${PAD.top + ch}" x2="${PAD.left + cw}" y2="${PAD.top + ch}"
+      stroke="var(--border)" stroke-width="1"/>
+
+    <!-- Area fill -->
+    <path d="M ${pts.split(' ').map((p,i) => i===0 ? `${p}` : p).join(' L ')}
+             L ${xScale(scores[scores.length-1].ts).toFixed(1)},${yScale(0).toFixed(1)}
+             L ${xScale(scores[0].ts).toFixed(1)},${yScale(0).toFixed(1)} Z"
+      fill="url(#fms-grad)"/>
+
+    <!-- Score line -->
+    <polyline points="${pts}"
+      fill="none" stroke="${scoreColor(midScore)}" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- X-axis labels -->
+    <text x="${PAD.left}" y="${PAD.top + ch + 14}"
+      fill="var(--text-muted)" font-size="9" text-anchor="middle">0s</text>
+    <text x="${PAD.left + cw}" y="${PAD.top + ch + 14}"
+      fill="var(--text-muted)" font-size="9" text-anchor="end">${(maxTs/1000).toFixed(1)}s</text>
+  `
 }
