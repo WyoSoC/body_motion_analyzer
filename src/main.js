@@ -3,6 +3,7 @@ import { getDB } from './db.js'
 import { initCalibration, deactivateCalibration } from './tabs/calibration.js'
 import { initCollection, deactivateCollection } from './tabs/collection.js'
 import { initAnalysis } from './tabs/analysis.js'
+import { initFMS, deactivateFMS } from './tabs/fms.js'
 
 // ── Status chips ──────────────────────────────────────────────
 
@@ -20,7 +21,7 @@ function setChip(el, label, cls) {
 const tabBtns     = document.querySelectorAll('.tab-btn')
 const tabContents = document.querySelectorAll('.tab-content')
 
-let initialized  = { calibration: false, collection: false, analysis: false }
+let initialized  = { calibration: false, collection: false, analysis: false, fms: false }
 let activeTabId  = null
 
 async function activateTab(tabId) {
@@ -29,6 +30,7 @@ async function activateTab(tabId) {
     stopAllCameraStreams()
     if (activeTabId === 'calibration') deactivateCalibration()
     if (activeTabId === 'collection')  deactivateCollection()
+    if (activeTabId === 'fms')         deactivateFMS()
     setChip(camStatus, 'Camera: Idle', 'status-idle')
   }
   activeTabId = tabId
@@ -62,6 +64,11 @@ async function activateTab(tabId) {
   if (tabId === 'analysis' && !initialized.analysis) {
     initialized.analysis = true
     await initAnalysis(container)
+  }
+
+  if (tabId === 'fms' && !initialized.fms) {
+    initialized.fms = true
+    await initFMS(container)
   }
 }
 
