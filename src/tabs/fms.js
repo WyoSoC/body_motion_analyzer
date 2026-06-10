@@ -1,13 +1,16 @@
 import { getAllSessions, getTrialsBySession, getTrial } from '../db.js'
 import {
   scoreDeepSquat, scoreHurdleStep,
-  toFMS, scoreColor,
+  scoreColor,
 } from '../utils/fms_scoring.js'
 
 // ── Module state ──────────────────────────────────────────────
 
-let selectedTest = 'deep-squat'
-let steppingLeg  = 'left'
+let selectedTest  = 'deep-squat'
+let steppingLeg   = 'left'
+let videoUrl      = null   // object URL — revoked on deactivate
+let analyzeScores = []     // [{ts, result}] kept for timeupdate lookups
+let analyzeMaxTs  = 1      // duration of last analyzed trial (ms)
 
 // ── Entry point ───────────────────────────────────────────────
 
@@ -17,7 +20,9 @@ export async function initFMS(container) {
   await loadSessions(container)
 }
 
-export function deactivateFMS() {}
+export function deactivateFMS() {
+  if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = null }
+}
 
 // ── UI builder ────────────────────────────────────────────────
 
@@ -72,7 +77,9 @@ function buildUI() {
         FMS scores are computed from the pose landmark data saved during
         Data Collection. Select a trial recorded with the Pose model,
         choose the movement test, then click <strong>Analyze</strong>.
-        The peak score (best frame) and a score timeline will appear on the right.
+        The peak score and score timeline will appear on the right.
+        If the trial has a video recording, it will play back with a
+        live score overlay synchronized to the chart.
       </p>
     </div>
   </div>
@@ -80,20 +87,40 @@ function buildUI() {
   <!-- Right panel: results -->
   <div id="fms-results" style="display:none">
 
-    <!-- Peak score -->
-    <div class="card" id="fms-score-card">
-      <div class="card-title">Peak Score</div>
+    <!-- Video replay -->
+    <div class="card" id="fms-video-card" style="display:none">
+      <div class="card-title">Video Replay</div>
+      <div class="camera-wrap" style="position:relative">
+        <video id="fms-video" controls playsinline
+          style="width:100%;border-radius:6px;display:block;background:#000"></video>
+        <!-- Live score badge overlaid on video -->
+        <div id="fms-live-badge" style="
+          position:absolute;top:10px;left:10px;
+          background:#00000088;border-radius:8px;padding:6px 12px;
+          display:none;pointer-events:none">
+          <div id="fms-live-num"
+            style="font-size:28px;font-weight:700;line-height:1;color:#fff"></div>
+          <div id="fms-live-fms"
+            style="font-size:10px;color:#ffffffaa;margin-top:1px"></div>
+        </div>
+      </div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+        Click on the score chart below to seek to any point in the trial.
+      </div>
+    </div>
 
+    <!-- Peak score -->
+    <div class="card">
+      <div class="card-title">Peak Score</div>
       <div style="display:flex;gap:20px;align-items:center;margin-bottom:14px">
         <div style="text-align:center">
-          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-peak-num" >—</div>
+          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-peak-num">—</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="fms-peak-fms">FMS —</div>
         </div>
         <div style="flex:1">
           <div id="fms-criteria"></div>
         </div>
       </div>
-
       <div style="font-size:10.5px;color:var(--text-muted);line-height:1.5">
         Score is continuous 0–100 (finer than FMS 0–3).
         <strong>67+</strong> = FMS&nbsp;3 &nbsp;·&nbsp;
@@ -106,7 +133,7 @@ function buildUI() {
     <div class="card">
       <div class="card-title">Score Over Time</div>
       <svg id="fms-chart" width="100%" height="160"
-        style="display:block;border-radius:6px;background:var(--surface2)">
+        style="display:block;border-radius:6px;background:var(--surface2);cursor:pointer">
       </svg>
       <div style="margin-top:6px;font-size:10.5px;color:var(--text-muted)">
         Each point = one recorded frame. Dashed lines: FMS 3 threshold (67) and FMS 2 threshold (34).
@@ -132,8 +159,7 @@ function bindEvents(container) {
   })
 
   container.querySelector('#fms-trial-sel').addEventListener('change', e => {
-    const ok = !!e.target.value
-    container.querySelector('#fms-analyze-btn').disabled = !ok
+    container.querySelector('#fms-analyze-btn').disabled = !e.target.value
   })
 
   container.querySelector('#fms-analyze-btn').addEventListener('click', () => analyze(container))
@@ -172,31 +198,32 @@ async function loadSessions(container) {
 }
 
 async function loadTrials(container, sessionId) {
-  const trialSel = container.querySelector('#fms-trial-sel')
+  const trialSel   = container.querySelector('#fms-trial-sel')
   const analyzeBtn = container.querySelector('#fms-analyze-btn')
 
   if (!sessionId) {
     trialSel.innerHTML = '<option value="">— select trial —</option>'
-    trialSel.disabled = true
+    trialSel.disabled  = true
     analyzeBtn.disabled = true
     return
   }
 
-  const trials = await getTrialsBySession(sessionId)
+  const trials     = await getTrialsBySession(sessionId)
   const poseTrials = trials.filter(t => t.model === 'pose' && t.landmarkData?.length)
 
   if (!poseTrials.length) {
     trialSel.innerHTML = '<option value="">No pose trials in this session</option>'
-    trialSel.disabled = true
+    trialSel.disabled  = true
     analyzeBtn.disabled = true
     return
   }
 
   trialSel.innerHTML = '<option value="">— select trial —</option>' +
-    poseTrials.map(t =>
-      `<option value="${t.id}">${t.name} (${t.landmarkData.length} frames, ${t.duration?.toFixed(1) ?? '?'}s)</option>`
-    ).join('')
-  trialSel.disabled = false
+    poseTrials.map(t => {
+      const hasVideo = t.videoBlob ? ' 🎬' : ''
+      return `<option value="${t.id}">${t.name}${hasVideo} (${t.landmarkData.length} frames, ${t.duration?.toFixed(1) ?? '?'}s)</option>`
+    }).join('')
+  trialSel.disabled   = false
   analyzeBtn.disabled = true
 }
 
@@ -209,7 +236,7 @@ async function analyze(container) {
   const statusEl = container.querySelector('#fms-status')
   statusEl.textContent = 'Analyzing…'
 
-  const trial = await getTrial(trialId)
+  const trial  = await getTrial(trialId)
   const frames = trial.landmarkData.filter(f => f.worldLandmarks?.length === 33)
 
   if (!frames.length) {
@@ -228,29 +255,35 @@ async function analyze(container) {
     s.result.total > best.result.total ? s : best
   )
 
-  statusEl.textContent = `${frames.length} frames analyzed. Peak at ${(peakEntry.ts / 1000).toFixed(2)}s.`
+  analyzeScores = scores
+  analyzeMaxTs  = scores[scores.length - 1].ts
 
-  renderResults(container, scores, peakEntry.result)
+  statusEl.textContent =
+    `${frames.length} frames analyzed. Peak at ${(peakEntry.ts / 1000).toFixed(2)}s.`
+
+  renderResults(container, scores, peakEntry.result, trial)
 }
 
-// ── Rendering ──────────────────────────────────────────────────
+// ── Rendering ────────────────────────────────────────────────
 
-function renderResults(container, scores, peak) {
+function renderResults(container, scores, peak, trial) {
   container.querySelector('#fms-results').style.display = ''
   container.querySelector('#fms-empty').style.display   = 'none'
+
+  // Video replay
+  setupVideo(container, trial)
 
   // Peak score
   const color = scoreColor(peak.total)
   const numEl = container.querySelector('#fms-peak-num')
-  numEl.textContent  = peak.total
-  numEl.style.color  = color
+  numEl.textContent = peak.total
+  numEl.style.color = color
   const fmsEl = container.querySelector('#fms-peak-fms')
   fmsEl.textContent = `FMS ${peak.fmsEquiv}`
   fmsEl.style.color = color
 
   // Criteria breakdown
-  const criteriaEl = container.querySelector('#fms-criteria')
-  criteriaEl.innerHTML = peak.criteria.map(c => {
+  container.querySelector('#fms-criteria').innerHTML = peak.criteria.map(c => {
     const col = scoreColor(c.score)
     return `
     <div style="margin-bottom:8px">
@@ -267,78 +300,159 @@ function renderResults(container, scores, peak) {
     </div>`
   }).join('')
 
-  // Score timeline chart
-  drawChart(container.querySelector('#fms-chart'), scores)
+  // Chart
+  drawChart(container, scores)
 }
 
-function drawChart(svg, scores) {
-  const W = svg.clientWidth || 600
-  const H = 160
-  const PAD = { top: 12, right: 12, bottom: 20, left: 36 }
-  const cw = W - PAD.left - PAD.right
-  const ch = H - PAD.top  - PAD.bottom
+// ── Video setup ───────────────────────────────────────────────
 
-  const totals = scores.map(s => s.result.total)
-  const maxTs  = scores[scores.length - 1]?.ts || 1
+function setupVideo(container, trial) {
+  const videoCard = container.querySelector('#fms-video-card')
+  const videoEl   = container.querySelector('#fms-video')
 
-  const xScale = ts => PAD.left + (ts / maxTs) * cw
-  const yScale = v  => PAD.top  + ch - (v / 100) * ch
+  if (!trial.videoBlob) {
+    videoCard.style.display = 'none'
+    return
+  }
 
-  // Build polyline points
-  const pts = scores.map(s => `${xScale(s.ts).toFixed(1)},${yScale(s.result.total).toFixed(1)}`).join(' ')
+  videoCard.style.display = ''
 
-  // Color segments by score (simple approach: single colored line with inline style)
-  // Use an area fill under the curve
-  const areaStart = `${xScale(scores[0].ts).toFixed(1)},${yScale(0).toFixed(1)}`
-  const areaEnd   = `${xScale(scores[scores.length-1].ts).toFixed(1)},${yScale(0).toFixed(1)}`
-  const areaPath  = `M ${areaStart} L ${pts.replace(/^[^ ]+/, '')} L ${areaEnd} Z`
+  // Revoke any previous object URL before creating a new one
+  if (videoUrl) URL.revokeObjectURL(videoUrl)
+  videoUrl = URL.createObjectURL(trial.videoBlob)
+  videoEl.src = videoUrl
 
+  // Remove any previous listener by cloning
+  const fresh = videoEl.cloneNode(true)
+  fresh.src = videoUrl
+  videoEl.replaceWith(fresh)
+
+  fresh.addEventListener('timeupdate', () => onTimeUpdate(container, fresh))
+  fresh.addEventListener('play',  () => container.querySelector('#fms-live-badge').style.display = '')
+  fresh.addEventListener('pause', () => container.querySelector('#fms-live-badge').style.display = 'none')
+  fresh.addEventListener('ended', () => container.querySelector('#fms-live-badge').style.display = 'none')
+}
+
+function onTimeUpdate(container, videoEl) {
+  const currentMs = videoEl.currentTime * 1000
+
+  // Find nearest scored frame (binary search)
+  const entry = nearestScore(analyzeScores, currentMs)
+  if (!entry) return
+
+  // Update live badge
+  const color = scoreColor(entry.result.total)
+  const numEl = container.querySelector('#fms-live-num')
+  const fmsEl = container.querySelector('#fms-live-fms')
+  if (numEl) { numEl.textContent = entry.result.total; numEl.style.color = color }
+  if (fmsEl) { fmsEl.textContent = `FMS ${entry.result.fmsEquiv}` }
+
+  // Update chart cursor
+  updateCursor(container.querySelector('#fms-chart'), currentMs)
+}
+
+function nearestScore(scores, targetMs) {
+  if (!scores.length) return null
+  let lo = 0, hi = scores.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (scores[mid].ts < targetMs) lo = mid + 1
+    else hi = mid
+  }
+  if (lo > 0 && Math.abs(scores[lo - 1].ts - targetMs) < Math.abs(scores[lo].ts - targetMs))
+    lo--
+  return scores[lo]
+}
+
+// ── Chart ─────────────────────────────────────────────────────
+
+const CHART_PAD = { top: 12, right: 12, bottom: 20, left: 36 }
+
+function drawChart(container, scores) {
+  const svg  = container.querySelector('#fms-chart')
+  const W    = svg.clientWidth || 600
+  const H    = 160
+  const { top, right, bottom, left } = CHART_PAD
+  const cw   = W - left - right
+  const ch   = H - top  - bottom
+  const maxTs = scores[scores.length - 1]?.ts || 1
+
+  const xScale = ts => left + (ts / maxTs) * cw
+  const yScale = v  => top  + ch - (v / 100) * ch
+
+  const pts = scores
+    .map(s => `${xScale(s.ts).toFixed(1)},${yScale(s.result.total).toFixed(1)}`)
+    .join(' ')
+
+  const totals   = scores.map(s => s.result.total)
+  const midScore = totals.reduce((a, b) => a + b, 0) / totals.length
+  const lineColor = scoreColor(midScore)
   const y67 = yScale(67).toFixed(1)
   const y34 = yScale(34).toFixed(1)
-  const midScore = totals.reduce((a, b) => a + b, 0) / totals.length
 
   svg.innerHTML = `
     <defs>
       <linearGradient id="fms-grad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${scoreColor(midScore)}" stop-opacity="0.25"/>
-        <stop offset="100%" stop-color="${scoreColor(midScore)}" stop-opacity="0.03"/>
+        <stop offset="0%"   stop-color="${lineColor}" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="${lineColor}" stop-opacity="0.03"/>
       </linearGradient>
     </defs>
 
-    <!-- Y-axis -->
-    <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + ch}"
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${top+ch}"
       stroke="var(--border)" stroke-width="1"/>
 
-    <!-- Threshold lines -->
-    <line x1="${PAD.left}" y1="${y67}" x2="${PAD.left + cw}" y2="${y67}"
+    <line x1="${left}" y1="${y67}" x2="${left+cw}" y2="${y67}"
       stroke="#3ecf70" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
-    <text x="${PAD.left - 4}" y="${y67}" fill="#3ecf70" font-size="9" text-anchor="end"
+    <text x="${left-4}" y="${y67}" fill="#3ecf70" font-size="9" text-anchor="end"
       dominant-baseline="middle" opacity="0.8">67</text>
 
-    <line x1="${PAD.left}" y1="${y34}" x2="${PAD.left + cw}" y2="${y34}"
+    <line x1="${left}" y1="${y34}" x2="${left+cw}" y2="${y34}"
       stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
-    <text x="${PAD.left - 4}" y="${y34}" fill="#f59e0b" font-size="9" text-anchor="end"
+    <text x="${left-4}" y="${y34}" fill="#f59e0b" font-size="9" text-anchor="end"
       dominant-baseline="middle" opacity="0.8">34</text>
 
-    <!-- X baseline -->
-    <line x1="${PAD.left}" y1="${PAD.top + ch}" x2="${PAD.left + cw}" y2="${PAD.top + ch}"
+    <line x1="${left}" y1="${top+ch}" x2="${left+cw}" y2="${top+ch}"
       stroke="var(--border)" stroke-width="1"/>
 
-    <!-- Area fill -->
-    <path d="M ${pts.split(' ').map((p,i) => i===0 ? `${p}` : p).join(' L ')}
+    <path d="M ${pts.split(' ').join(' L ')}
              L ${xScale(scores[scores.length-1].ts).toFixed(1)},${yScale(0).toFixed(1)}
              L ${xScale(scores[0].ts).toFixed(1)},${yScale(0).toFixed(1)} Z"
       fill="url(#fms-grad)"/>
 
-    <!-- Score line -->
-    <polyline points="${pts}"
-      fill="none" stroke="${scoreColor(midScore)}" stroke-width="2"
+    <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="2"
       stroke-linejoin="round" stroke-linecap="round"/>
 
-    <!-- X-axis labels -->
-    <text x="${PAD.left}" y="${PAD.top + ch + 14}"
+    <text x="${left}" y="${top+ch+14}"
       fill="var(--text-muted)" font-size="9" text-anchor="middle">0s</text>
-    <text x="${PAD.left + cw}" y="${PAD.top + ch + 14}"
+    <text x="${left+cw}" y="${top+ch+14}"
       fill="var(--text-muted)" font-size="9" text-anchor="end">${(maxTs/1000).toFixed(1)}s</text>
+
+    <!-- Playhead cursor (hidden until video plays) -->
+    <line id="fms-cursor" x1="${left}" y1="${top}" x2="${left}" y2="${top+ch}"
+      stroke="white" stroke-width="1.5" opacity="0.85" display="none"/>
+
+    <!-- Transparent hit area for seek clicks -->
+    <rect id="fms-chart-hit" x="${left}" y="${top}" width="${cw}" height="${ch}"
+      fill="transparent"/>
   `
+
+  // Seek on chart click
+  svg.querySelector('#fms-chart-hit').addEventListener('click', e => {
+    const rect = svg.getBoundingClientRect()
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - left) / cw))
+    const video = container.querySelector('#fms-video')
+    if (video?.src) video.currentTime = frac * maxTs / 1000
+  })
+}
+
+function updateCursor(svg, currentMs) {
+  const cursor = svg?.querySelector('#fms-cursor')
+  if (!cursor) return
+  const W  = svg.clientWidth || 600
+  const { left, right } = CHART_PAD
+  const cw = W - left - right
+  const x  = (left + (currentMs / analyzeMaxTs) * cw).toFixed(1)
+  cursor.setAttribute('x1', x)
+  cursor.setAttribute('x2', x)
+  cursor.removeAttribute('display')
 }
