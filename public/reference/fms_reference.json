@@ -1,0 +1,83 @@
+{
+  "source": {
+    "url": "https://www.youtube.com/watch?v=TLTSpxPzKug",
+    "videoId": "TLTSpxPzKug",
+    "description": "FMS reference demonstration video used as the 100-point gold standard for grading",
+    "downloadedFile": "TLTSpxPzKug.mp4"
+  },
+  "role": "gold-standard",
+  "fullScore": 100,
+  "segments": [
+    {
+      "id": "deep-squat",
+      "name": "Deep Squat",
+      "start": "0:14.0",
+      "end": "0:24.7",
+      "startSec": 14,
+      "endSec": 24.7,
+      "file": "segments/01_deep_squat.mp4",
+      "landmarks": "landmarks/01_deep_squat.json"
+    },
+    {
+      "id": "hurdle-step",
+      "name": "Hurdle Step",
+      "start": "0:26.0",
+      "end": "0:58.4",
+      "startSec": 26,
+      "endSec": 58.4,
+      "file": "segments/02_hurdle_step.mp4",
+      "landmarks": "landmarks/02_hurdle_step.json"
+    },
+    {
+      "id": "inline-lunge",
+      "name": "In-Line Lunge",
+      "start": "1:00.0",
+      "end": "1:24.2",
+      "startSec": 60,
+      "endSec": 84.2,
+      "file": "segments/03_inline_lunge.mp4",
+      "landmarks": "landmarks/03_inline_lunge.json"
+    },
+    {
+      "id": "shoulder-mobility",
+      "name": "Shoulder Mobility",
+      "start": "1:26.2",
+      "end": "1:38.9",
+      "startSec": 86.25,
+      "endSec": 98.9,
+      "file": "segments/04_shoulder_mobility.mp4",
+      "landmarks": "landmarks/04_shoulder_mobility.json"
+    },
+    {
+      "id": "active-straight-leg-raise",
+      "name": "Active Straight Leg Raise",
+      "start": "1:41.0",
+      "end": "2:10.1",
+      "startSec": 101,
+      "endSec": 130.1,
+      "file": "segments/05_active_straight_leg_raise.mp4",
+      "landmarks": "landmarks/05_active_straight_leg_raise.json"
+    },
+    {
+      "id": "trunk-stability-pushup",
+      "name": "Trunk Stability Push Up",
+      "start": "2:12.0",
+      "end": "2:25.7",
+      "startSec": 132,
+      "endSec": 145.7,
+      "file": "segments/06_trunk_stability_pushup.mp4",
+      "landmarks": "landmarks/06_trunk_stability_pushup.json"
+    },
+    {
+      "id": "rotary-stability",
+      "name": "Rotary Stability Quadruped",
+      "start": "2:28.0",
+      "end": "2:51.3",
+      "startSec": 148,
+      "endSec": 171.3,
+      "file": "segments/07_rotary_stability.mp4",
+      "landmarks": "landmarks/07_rotary_stability.json"
+    }
+  ],
+  "trimNote": "Segment boundaries exclude the crossfade dissolves between exercises (detected via frame blend-ratio analysis, 2026-07-13)."
+}

@@ -4,3 +4,5 @@ dist/
 *.local
 public/wasm/
 public/vendor/opencv.js
+reference/*.mp4
+public/reference/segments/

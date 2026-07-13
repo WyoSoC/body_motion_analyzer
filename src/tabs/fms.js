@@ -3,6 +3,22 @@ import {
   scoreDeepSquat, scoreHurdleStep,
   scoreColor,
 } from '../utils/fms_scoring.js'
+import { loadReferenceManifest, segmentUrl, findSegment, loadReferenceLandmarks } from '../utils/reference.js'
+import { scoreAgainstReference } from '../utils/fms_dtw.js'
+
+// All 7 FMS movement tests. Ids match the reference manifest segment ids.
+const TESTS = [
+  { id: 'deep-squat',                label: 'Deep Squat' },
+  { id: 'hurdle-step',               label: 'Hurdle Step' },
+  { id: 'inline-lunge',              label: 'In-Line Lunge' },
+  { id: 'shoulder-mobility',         label: 'Shoulder Mobility' },
+  { id: 'active-straight-leg-raise', label: 'Leg Raise (ASLR)' },
+  { id: 'trunk-stability-pushup',    label: 'Push-Up' },
+  { id: 'rotary-stability',          label: 'Rotary Stability' },
+]
+
+// Tests that also have geometric (rule-based) per-frame criteria.
+const RULE_TESTS = new Set(['deep-squat', 'hurdle-step'])
 
 // ── Pose skeleton connections (MediaPipe Pose 33-landmark model) ──
 const POSE_CONN = [
@@ -67,6 +83,7 @@ let videoUrl      = null   // object URL — revoked on deactivate
 let analyzeScores = []     // [{ts, result}] for timeupdate score lookup
 let analyzeFrames = []     // [{ts, landmarks}] for skeleton drawing
 let analyzeMaxTs  = 1      // duration in ms of last analyzed trial
+let refManifest   = null   // FMS reference video manifest (null if unavailable)
 
 // ── Entry point ───────────────────────────────────────────────
 
@@ -74,10 +91,13 @@ export async function initFMS(container) {
   container.innerHTML = buildUI()
   bindEvents(container)
   await loadSessions(container)
+  refManifest = await loadReferenceManifest()
+  updateReferenceVideo(container)
 }
 
 export function deactivateFMS() {
   if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = null }
+  document.querySelector('#fms-ref-video')?.pause()
 }
 
 // ── UI builder ────────────────────────────────────────────────
@@ -103,9 +123,10 @@ function buildUI() {
 
       <div class="form-row">
         <label>Movement Test</label>
-        <div class="toggle-group" id="fms-test-toggle">
-          <button class="toggle-chip active" data-test="deep-squat">Deep Squat</button>
-          <button class="toggle-chip"        data-test="hurdle-step">Hurdle Step</button>
+        <div class="toggle-group" id="fms-test-toggle" style="flex-wrap:wrap">
+          ${TESTS.map((t, i) => `
+          <button class="toggle-chip ${i === 0 ? 'active' : ''}" data-test="${t.id}">${t.label}</button>`
+          ).join('')}
         </div>
       </div>
 
@@ -123,6 +144,16 @@ function buildUI() {
 
       <div id="fms-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)">
         Select a session and trial to begin.
+      </div>
+    </div>
+
+    <!-- Reference video for the selected movement test -->
+    <div class="card" id="fms-ref-card" style="display:none">
+      <div class="card-title">Reference — <span id="fms-ref-name"></span></div>
+      <video id="fms-ref-video" controls loop playsinline preload="metadata"
+        style="width:100%;display:block;border-radius:6px;background:#000"></video>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+        Gold-standard demonstration of this movement (scores as 100).
       </div>
     </div>
 
@@ -160,9 +191,31 @@ function buildUI() {
   <!-- Right panel: results -->
   <div id="fms-results" style="display:none">
 
-    <!-- Peak score + criteria -->
-    <div class="card">
-      <div class="card-title">Peak Score</div>
+    <!-- Reference similarity (DTW) — all tests -->
+    <div class="card" id="fms-dtw-card" style="display:none">
+      <div class="card-title">Reference Similarity (DTW)</div>
+
+      <div style="display:flex;gap:20px;align-items:center;margin-bottom:18px">
+        <div style="text-align:center;min-width:72px">
+          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-dtw-num">—</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="fms-dtw-fms">FMS —</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px">out of 100</div>
+        </div>
+        <div style="width:1px;background:var(--border);align-self:stretch"></div>
+        <div style="flex:1;font-size:11px;color:var(--text-muted);line-height:1.6">
+          Joint-angle trajectories aligned to the gold-standard reference with
+          Dynamic Time Warping — tempo differences don't cost points, deviations
+          from the reference movement pattern do.
+          <span id="fms-dtw-meta" style="display:block;margin-top:4px"></span>
+        </div>
+      </div>
+
+      <div id="fms-dtw-groups"></div>
+    </div>
+
+    <!-- Peak score + criteria (geometric rules — deep squat & hurdle step) -->
+    <div class="card" id="fms-peak-card">
+      <div class="card-title">Peak Score (Geometric Criteria)</div>
 
       <div style="display:flex;gap:20px;align-items:center;margin-bottom:18px">
         <div style="text-align:center;min-width:72px">
@@ -188,7 +241,7 @@ function buildUI() {
       <svg id="fms-chart" width="100%" height="160"
         style="display:block;border-radius:6px;background:var(--surface2);cursor:pointer">
       </svg>
-      <div style="margin-top:6px;font-size:10.5px;color:var(--text-muted)">
+      <div id="fms-chart-note" style="margin-top:6px;font-size:10.5px;color:var(--text-muted)">
         Each point = one recorded frame.
         Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds.
         Click to seek the video.
@@ -226,6 +279,7 @@ function bindEvents(container) {
       container.querySelectorAll('[data-test]').forEach(b =>
         b.classList.toggle('active', b.dataset.test === selectedTest))
       container.querySelector('#fms-leg-row').classList.toggle('hidden', selectedTest !== 'hurdle-step')
+      updateReferenceVideo(container)
     })
   })
 
@@ -236,6 +290,22 @@ function bindEvents(container) {
         b.classList.toggle('active', b.dataset.leg === steppingLeg))
     })
   })
+}
+
+// ── Reference video ───────────────────────────────────────────
+
+function updateReferenceVideo(container) {
+  const card = container.querySelector('#fms-ref-card')
+  if (!card) return
+
+  const seg = findSegment(refManifest, selectedTest)
+  if (!seg) { card.style.display = 'none'; return }
+
+  const video = container.querySelector('#fms-ref-video')
+  const url   = segmentUrl(seg)
+  if (!video.src.endsWith(url)) video.src = url
+  container.querySelector('#fms-ref-name').textContent = seg.name
+  card.style.display = ''
 }
 
 // ── Data loading ──────────────────────────────────────────────
@@ -300,36 +370,109 @@ async function analyze(container) {
     return
   }
 
-  const scores = frames.map(f => {
-    const result = selectedTest === 'deep-squat'
-      ? scoreDeepSquat(f.worldLandmarks)
-      : scoreHurdleStep(f.worldLandmarks, steppingLeg)
-    return { ts: f.timestamp, result }
-  })
+  // Geometric per-frame scoring — deep squat & hurdle step only
+  let ruleScores = null, peak = null
+  if (RULE_TESTS.has(selectedTest)) {
+    ruleScores = frames.map(f => {
+      const result = selectedTest === 'deep-squat'
+        ? scoreDeepSquat(f.worldLandmarks)
+        : scoreHurdleStep(f.worldLandmarks, steppingLeg)
+      return { ts: f.timestamp, result }
+    })
+    peak = ruleScores.reduce((best, s) =>
+      s.result.total > best.result.total ? s : best
+    ).result
+  }
 
-  const peakEntry = scores.reduce((best, s) =>
-    s.result.total > best.result.total ? s : best
-  )
+  // DTW similarity against the gold-standard reference — all tests
+  const refData = await loadReferenceLandmarks(refManifest, selectedTest)
+  const dtwResult = refData ? scoreAgainstReference(frames, refData, selectedTest) : null
+
+  if (!ruleScores && !dtwResult) {
+    statusEl.textContent =
+      'No reference landmarks available for this test — run scripts/extract_reference_landmarks.py first.'
+    return
+  }
+
+  // Per-frame series used by the chart, video badge, and seek cursor:
+  // geometric score where available, DTW similarity otherwise.
+  const scores = ruleScores ?? dtwResult.perFrame.map(p => ({
+    ts: p.ts,
+    result: { total: p.score, fmsEquiv: p.score >= 67 ? 3 : p.score >= 34 ? 2 : p.score >= 1 ? 1 : 0 },
+  }))
 
   analyzeScores = scores
   analyzeFrames = frames.map(f => ({ ts: f.timestamp, landmarks: f.landmarks }))
   analyzeMaxTs  = scores[scores.length - 1].ts
 
-  statusEl.textContent =
-    `${frames.length} frames analyzed · peak ${peakEntry.result.total} at ${(peakEntry.ts / 1000).toFixed(2)} s`
+  statusEl.textContent = `${frames.length} frames analyzed` +
+    (dtwResult ? ` · DTW similarity ${dtwResult.total}` : '') +
+    (peak ? ` · peak ${peak.total}` : '')
 
-  renderResults(container, scores, peakEntry.result, trial)
+  renderResults(container, { scores, peak, dtwResult, trial })
 }
 
 // ── Rendering ────────────────────────────────────────────────
 
-function renderResults(container, scores, peak, trial) {
+function renderResults(container, { scores, peak, dtwResult, trial }) {
   container.querySelector('#fms-results').style.display = ''
   container.querySelector('#fms-empty').style.display   = 'none'
 
   setupVideo(container, trial)
-  renderPeakScore(container, peak)
+  renderDTW(container, dtwResult)
+
+  container.querySelector('#fms-peak-card').style.display = peak ? '' : 'none'
+  if (peak) renderPeakScore(container, peak)
+
   drawChart(container, scores)
+
+  const chartNote = container.querySelector('#fms-chart-note')
+  if (chartNote) {
+    chartNote.textContent = peak
+      ? 'Each point = one recorded frame (geometric score). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
+      : 'Each point = one recorded frame (DTW similarity to the aligned reference frame). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
+  }
+}
+
+function renderDTW(container, dtw) {
+  const card = container.querySelector('#fms-dtw-card')
+  if (!dtw) { card.style.display = 'none'; return }
+  card.style.display = ''
+
+  const color = scoreColor(dtw.total)
+  const numEl = container.querySelector('#fms-dtw-num')
+  numEl.textContent = dtw.total
+  numEl.style.color = color
+
+  const fmsEl = container.querySelector('#fms-dtw-fms')
+  fmsEl.textContent = `FMS ${dtw.fmsEquiv}`
+  fmsEl.style.color = color
+
+  container.querySelector('#fms-dtw-meta').textContent =
+    `Avg deviation ${dtw.avgDev.toFixed(1)}° per joint` +
+    (dtw.mirrored ? ' · scored mirrored (opposite lead side)' : '')
+
+  container.querySelector('#fms-dtw-groups').innerHTML = dtw.groups.map(g => {
+    const col = scoreColor(g.score)
+    return `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+        <span style="font-size:13px;font-weight:600">${g.name}</span>
+        <span style="display:flex;align-items:baseline;gap:6px">
+          <span style="font-size:11px;color:var(--text-muted)">${Math.round(g.weight * 100)} %</span>
+          <span style="font-size:14px;color:${col};font-weight:700">${g.score}
+            <span style="font-size:10px;font-weight:400;color:var(--text-muted)">/100</span>
+          </span>
+        </span>
+      </div>
+      <div style="height:7px;border-radius:4px;background:var(--border);overflow:hidden;margin-bottom:4px">
+        <div style="height:100%;width:${g.score}%;background:${col};border-radius:4px;transition:width .2s"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted)">
+        Avg deviation from reference: ${g.dev.toFixed(1)}°
+      </div>
+    </div>`
+  }).join('')
 }
 
 function renderPeakScore(container, peak) {

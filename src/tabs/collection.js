@@ -1,5 +1,6 @@
 import { listCameras, listCamerasAfterPermission, openCamera, stopCamera, loadModel, detectFrame, drawResults } from '../utils/mediapipe.js'
 import { VoiceController } from '../utils/voice.js'
+import { loadReferenceManifest, segmentUrl } from '../utils/reference.js'
 import { getAllCalibrations, saveSession, getAllSessions, saveTrial, updateTrial, getTrialsBySession, getAllSessions as _gas, deleteSession, deleteTrial, downloadBlob, exportTrialCSV, getSession } from '../db.js'
 
 // ── Core state ────────────────────────────────────────────────
@@ -439,6 +440,7 @@ export async function initCollection(container, { onVoiceStatus, onCamStatus }) 
   bindEvents(container)
   initVoice(container)
   _init3DPlot(container)
+  await initReferencePanel(container)
 }
 
 // ── UI ────────────────────────────────────────────────────────
@@ -613,6 +615,30 @@ function buildUI() {
       </div>
     </div>
 
+    <!-- FMS reference video — follow along while recording -->
+    <div class="card" id="col-ref-card" style="display:none">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>FMS Reference Video</span>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;
+          color:var(--text-muted);font-weight:400;cursor:pointer">
+          <input type="checkbox" id="col-ref-loop" checked style="accent-color:var(--accent)">
+          Loop
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label>Movement</label>
+        <select id="col-ref-sel"></select>
+      </div>
+
+      <video id="col-ref-video" controls loop playsinline preload="metadata"
+        style="width:100%;display:block;border-radius:6px;background:#000"></video>
+
+      <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+        Gold-standard demonstration — follow along while recording your trial.
+      </div>
+    </div>
+
     <!-- Voice control -->
     <div class="card">
       <div class="card-title">Voice Control</div>
@@ -746,6 +772,34 @@ function bindEvents(container) {
   container.querySelector('#col-start-trial').addEventListener('click', () => startTrial(container))
   container.querySelector('#col-stop-trial').addEventListener('click',  () => stopTrial(container))
   container.querySelector('#col-export-session').addEventListener('click', () => exportSession(container))
+}
+
+// ── FMS reference video panel ─────────────────────────────────
+
+async function initReferencePanel(container) {
+  const manifest = await loadReferenceManifest()
+  const card = container.querySelector('#col-ref-card')
+  if (!manifest?.segments?.length || !card) return
+
+  const sel   = container.querySelector('#col-ref-sel')
+  const video = container.querySelector('#col-ref-video')
+
+  sel.innerHTML = manifest.segments.map(s =>
+    `<option value="${s.id}">${s.name}</option>`
+  ).join('')
+
+  const setSegment = id => {
+    const seg = manifest.segments.find(s => s.id === id) ?? manifest.segments[0]
+    video.src = segmentUrl(seg)
+  }
+
+  sel.addEventListener('change', e => setSegment(e.target.value))
+  container.querySelector('#col-ref-loop').addEventListener('change', e => {
+    video.loop = e.target.checked
+  })
+
+  setSegment(manifest.segments[0].id)
+  card.style.display = ''
 }
 
 function initVoice(container) {
@@ -1280,6 +1334,7 @@ export function deactivateCollection() {
   activeStream = null
   voice?.stop()
   _onVoiceStatus?.('off')
+  document.querySelector('#col-ref-video')?.pause()
 
   const startBtn = document.querySelector('#col-start-cam')
   const stopBtn  = document.querySelector('#col-stop-cam')
