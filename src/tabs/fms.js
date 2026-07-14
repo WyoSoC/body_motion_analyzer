@@ -1,6 +1,7 @@
 import { getAllSessions, getTrialsBySession, getTrial } from '../db.js'
 import { loadReferenceManifest, segmentUrl, findSegment, loadReferenceLandmarks } from '../utils/reference.js'
 import { scoreAgainstReference, scoreColor } from '../utils/fms_dtw.js'
+import { scoreGeometric } from '../utils/fms_geometric.js'
 
 // All 7 FMS movement tests. Ids match the reference manifest segment ids.
 const TESTS = [
@@ -131,9 +132,23 @@ function buildUI() {
   <!-- Right panel: results -->
   <div id="fms-results" style="display:none">
 
-    <!-- Reference similarity (DTW) — all tests -->
+    <!-- Overall combined score (shown when geometric analysis is available) -->
+    <div class="card" id="fms-overall-card" style="display:none">
+      <div class="card-title">Overall FMS Score</div>
+      <div style="display:flex;gap:20px;align-items:center">
+        <div style="text-align:center;min-width:72px">
+          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-overall-num">—</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="fms-overall-fms">FMS —</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:4px">out of 100</div>
+        </div>
+        <div style="width:1px;background:var(--border);align-self:stretch"></div>
+        <div style="flex:1;font-size:11px;color:var(--text-muted);line-height:1.7" id="fms-overall-breakdown"></div>
+      </div>
+    </div>
+
+    <!-- Form Analysis (DTW) — all tests -->
     <div class="card" id="fms-dtw-card" style="display:none">
-      <div class="card-title">Reference Similarity (DTW)</div>
+      <div class="card-title">Form Analysis (DTW)</div>
 
       <div style="display:flex;gap:20px;align-items:center;margin-bottom:18px">
         <div style="text-align:center;min-width:72px">
@@ -151,6 +166,27 @@ function buildUI() {
       </div>
 
       <div id="fms-dtw-groups"></div>
+    </div>
+
+    <!-- Horizontal Symmetry (geometric) -->
+    <div class="card" id="fms-sym-card" style="display:none">
+      <div class="card-title">Horizontal Symmetry — <span id="fms-sym-score">—</span>/100</div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px">
+        Left/right symmetry of each body section during the movement. Perfect
+        mirror symmetry scores 100; larger left–right differences lose points.
+      </div>
+      <div id="fms-sym-groups"></div>
+    </div>
+
+    <!-- Vertical Alignment (geometric, vs reference) -->
+    <div class="card" id="fms-vert-card" style="display:none">
+      <div class="card-title">Vertical Alignment — <span id="fms-vert-score">—</span>/100</div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px">
+        How little each section's markers sway sideways as the body moves up and
+        down — less drift means better core stacking. The gold-standard reference
+        scores 100; drifting more than it loses points.
+      </div>
+      <div id="fms-vert-groups"></div>
     </div>
 
     <!-- Score over time -->
@@ -218,6 +254,26 @@ function updateReferenceVideo(container) {
 }
 
 // ── Data loading ──────────────────────────────────────────────
+
+// Re-read sessions/trials from the DB, preserving the current selection when it
+// still exists. Called on tab re-activation so newly recorded trials show up.
+export async function refreshFMS(container) {
+  const sessionSel = container.querySelector('#fms-session-sel')
+  if (!sessionSel) return
+  const prevSession = sessionSel.value
+  const prevTrial   = container.querySelector('#fms-trial-sel')?.value
+
+  await loadSessions(container)
+  if (!prevSession || !sessionSel.querySelector(`option[value="${prevSession}"]`)) return
+
+  sessionSel.value = prevSession
+  await loadTrials(container, Number(prevSession))
+  const trialSel = container.querySelector('#fms-trial-sel')
+  if (prevTrial && trialSel.querySelector(`option[value="${prevTrial}"]`)) {
+    trialSel.value = prevTrial
+    container.querySelector('#fms-analyze-btn').disabled = false
+  }
+}
 
 async function loadSessions(container) {
   const sessions = await getAllSessions()
@@ -289,6 +345,17 @@ async function analyze(container) {
     return
   }
 
+  // Geometric analysis (Horizontal Symmetry + Vertical Alignment) — task-dependent;
+  // null for tests without a geometric config (they stay Form/DTW-only).
+  const geoResult = scoreGeometric(frames, refData, selectedTest)
+
+  // Combined final score: equal thirds of Form + Symmetry + Vertical when
+  // geometric analysis is available, otherwise the Form score alone.
+  const finalScore = geoResult
+    ? Math.round((dtwResult.total + geoResult.symmetry.score + geoResult.vertical.score) / 3)
+    : dtwResult.total
+  const finalFms = finalScore >= 67 ? 3 : finalScore >= 34 ? 2 : finalScore >= 1 ? 1 : 0
+
   // Per-frame DTW similarity series — drives the chart, video badge, and seek cursor.
   const scores = dtwResult.perFrame.map(p => ({
     ts: p.ts,
@@ -299,19 +366,22 @@ async function analyze(container) {
   analyzeFrames = frames.map(f => ({ ts: f.timestamp, landmarks: f.landmarks }))
   analyzeMaxTs  = scores[scores.length - 1].ts
 
-  statusEl.textContent = `${frames.length} frames analyzed · DTW similarity ${dtwResult.total}`
+  statusEl.textContent = `${frames.length} frames analyzed · overall ${finalScore}` +
+    (geoResult ? ` (form ${dtwResult.total} · sym ${geoResult.symmetry.score} · vert ${geoResult.vertical.score})` : '')
 
-  renderResults(container, { scores, dtwResult, trial })
+  renderResults(container, { scores, dtwResult, geoResult, finalScore, finalFms, trial })
 }
 
 // ── Rendering ────────────────────────────────────────────────
 
-function renderResults(container, { scores, dtwResult, trial }) {
+function renderResults(container, { scores, dtwResult, geoResult, finalScore, finalFms, trial }) {
   container.querySelector('#fms-results').style.display = ''
   container.querySelector('#fms-empty').style.display   = 'none'
 
   setupVideo(container, trial)
+  renderOverall(container, { dtwResult, geoResult, finalScore, finalFms })
   renderDTW(container, dtwResult)
+  renderGeometric(container, geoResult)
 
   drawChart(container, scores)
 
@@ -320,6 +390,61 @@ function renderResults(container, { scores, dtwResult, trial }) {
     chartNote.textContent =
       'Each point = one recorded frame (DTW similarity to the aligned reference frame). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
   }
+}
+
+// Overall combined score card — only shown when geometric analysis is available.
+function renderOverall(container, { dtwResult, geoResult, finalScore, finalFms }) {
+  const card = container.querySelector('#fms-overall-card')
+  if (!geoResult) { card.style.display = 'none'; return }
+  card.style.display = ''
+
+  const color = scoreColor(finalScore)
+  const numEl = container.querySelector('#fms-overall-num')
+  numEl.textContent = finalScore
+  numEl.style.color = color
+
+  const fmsEl = container.querySelector('#fms-overall-fms')
+  fmsEl.textContent = `FMS ${finalFms}`
+  fmsEl.style.color = color
+
+  const chip = (label, s) =>
+    `<span style="color:${scoreColor(s)};font-weight:600">${label} ${s}</span>`
+  container.querySelector('#fms-overall-breakdown').innerHTML =
+    'Equal-weighted average of three categories:<br>' +
+    [chip('Form', dtwResult.total),
+     chip('Symmetry', geoResult.symmetry.score),
+     chip('Vertical', geoResult.vertical.score)].join(' · ')
+}
+
+// A single labelled section bar for the geometric category cards.
+function sectionBar(s) {
+  const col = scoreColor(s.score)
+  return `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+        <span style="font-size:13px;font-weight:600">${s.name}</span>
+        <span style="font-size:14px;color:${col};font-weight:700">${s.score}
+          <span style="font-size:10px;font-weight:400;color:var(--text-muted)">/100</span>
+        </span>
+      </div>
+      <div style="height:7px;border-radius:4px;background:var(--border);overflow:hidden">
+        <div style="height:100%;width:${s.score}%;background:${col};border-radius:4px;transition:width .2s"></div>
+      </div>
+    </div>`
+}
+
+// Horizontal Symmetry + Vertical Alignment cards (hidden when unavailable).
+function renderGeometric(container, geo) {
+  const symCard  = container.querySelector('#fms-sym-card')
+  const vertCard = container.querySelector('#fms-vert-card')
+  if (!geo) { symCard.style.display = 'none'; vertCard.style.display = 'none'; return }
+  symCard.style.display  = ''
+  vertCard.style.display = ''
+
+  container.querySelector('#fms-sym-score').textContent  = geo.symmetry.score
+  container.querySelector('#fms-vert-score').textContent = geo.vertical.score
+  container.querySelector('#fms-sym-groups').innerHTML  = geo.symmetry.sections.map(sectionBar).join('')
+  container.querySelector('#fms-vert-groups').innerHTML = geo.vertical.sections.map(sectionBar).join('')
 }
 
 function renderDTW(container, dtw) {

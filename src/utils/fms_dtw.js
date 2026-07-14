@@ -19,7 +19,7 @@ export function scoreColor(s) {
 
 // ── Geometry ──────────────────────────────────────────────────
 
-function angleDeg(a, b, c) {
+export function angleDeg(a, b, c) {
   const v1 = { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }
   const v2 = { x: c.x - b.x, y: c.y - b.y, z: c.z - b.z }
   const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z
@@ -27,7 +27,7 @@ function angleDeg(a, b, c) {
   return Math.acos(Math.max(-1, Math.min(1, dot / (m + 1e-9)))) * 180 / Math.PI
 }
 
-function mid(a, b) {
+export function mid(a, b) {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
 }
 
@@ -49,7 +49,7 @@ function tiltDeg(a, b) {
 // Landmark indices: 11/12 shoulders, 13/14 elbows, 15/16 wrists,
 // 23/24 hips, 25/26 knees, 27/28 ankles, 31/32 foot index.
 
-const FEATURES = {
+export const FEATURES = {
   kneeL:     L => angleDeg(L[23], L[25], L[27]),
   kneeR:     L => angleDeg(L[24], L[26], L[28]),
   hipL:      L => angleDeg(L[11], L[23], L[25]),
@@ -83,9 +83,9 @@ const ARMS  = ['shoulderL', 'shoulderR', 'elbowL', 'elbowR']
 export const DTW_TESTS = {
   'deep-squat': {
     groups: [
-      { name: 'Lower Body Trajectory', features: LOWER, weight: 0.45 },
-      { name: 'Trunk Control',         features: TRUNK, weight: 0.30 },
-      { name: 'Arm Position',          features: ARMS,  weight: 0.25 },
+      { name: 'Upper Body / Arm Position', features: ARMS,  weight: 0.25 },
+      { name: 'Trunk Control',             features: TRUNK, weight: 0.30 },
+      { name: 'Lower Body Trajectory',     features: LOWER, weight: 0.45 },
     ],
   },
   'hurdle-step': {
