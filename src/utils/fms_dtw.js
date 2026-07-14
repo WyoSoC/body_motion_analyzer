@@ -12,6 +12,11 @@
 // Mirroring: the trial is scored in both normal and left/right-swapped
 // orientation and the better one wins, so the user may lead with either leg.
 
+// Map a 0–100 score to a red/amber/green UI color (FMS 1/2/3 bands).
+export function scoreColor(s) {
+  return s >= 67 ? '#3ecf70' : s >= 34 ? '#f59e0b' : '#ef4444'
+}
+
 // ── Geometry ──────────────────────────────────────────────────
 
 function angleDeg(a, b, c) {

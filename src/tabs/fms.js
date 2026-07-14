@@ -1,10 +1,6 @@
 import { getAllSessions, getTrialsBySession, getTrial } from '../db.js'
-import {
-  scoreDeepSquat, scoreHurdleStep,
-  scoreColor,
-} from '../utils/fms_scoring.js'
 import { loadReferenceManifest, segmentUrl, findSegment, loadReferenceLandmarks } from '../utils/reference.js'
-import { scoreAgainstReference } from '../utils/fms_dtw.js'
+import { scoreAgainstReference, scoreColor } from '../utils/fms_dtw.js'
 
 // All 7 FMS movement tests. Ids match the reference manifest segment ids.
 const TESTS = [
@@ -17,9 +13,6 @@ const TESTS = [
   { id: 'rotary-stability',          label: 'Rotary Stability' },
 ]
 
-// Tests that also have geometric (rule-based) per-frame criteria.
-const RULE_TESTS = new Set(['deep-squat', 'hurdle-step'])
-
 // ── Pose skeleton connections (MediaPipe Pose 33-landmark model) ──
 const POSE_CONN = [
   [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
@@ -31,54 +24,9 @@ const POSE_CONN = [
   [24,26],[26,28],[28,30],[28,32],[30,32],
 ]
 
-// ── Criterion explanations ─────────────────────────────────────
-const CRITERION_INFO = {
-  'Hip Depth': {
-    method: 'Average knee Y-position in world coordinates (hip at origin, Y increases downward). As the subject squats deeper the hips descend and the knee Y value drops toward zero or goes negative.',
-    thresholds: 'Knee +20 cm above origin → 0 pts · Knee at origin → 67 pts · Knee −10 cm (hip clearly below knee) → 100 pts',
-    weight: '35 %',
-  },
-  'Trunk–Tibia Angle': {
-    method: '3-D angle between the trunk vector (mid-hip → mid-shoulder) and the tibia vector (mid-ankle → mid-knee). An ideal deep squat has the trunk parallel to the tibia.',
-    thresholds: '0° difference → 100 pts · 10° → ~60 pts · ≥25° → 0 pts',
-    weight: '30 %',
-  },
-  'Knee Alignment': {
-    method: 'For each knee, the expected X-position is interpolated linearly between the hip and ankle at the knee\'s vertical depth. Score is based on the maximum deviation of either knee from that line (medial/lateral collapse).',
-    thresholds: '0 cm deviation → 100 pts · 5 cm → ~67 pts · ≥15 cm → 0 pts',
-    weight: '25 %',
-  },
-  'Overhead Alignment': {
-    method: 'Height of the mid-wrist relative to the mid-shoulder in world coordinates. A positive value means wrists are above shoulder height, as required when holding a dowel overhead.',
-    thresholds: 'Wrists 10 cm below shoulders → 0 pts · Level with shoulders → 25 pts · 30 cm above → 100 pts',
-    weight: '10 %',
-  },
-  'Step Height': {
-    method: 'Tibial tuberosity of the standing leg is estimated at 25 % of the distance from knee to ankle. Clearance is the vertical gap between that landmark and the stepping foot index.',
-    thresholds: 'Foot 5 cm below hurdle height → 0 pts · Foot at hurdle height → 71 pts · Foot 5 cm above → 100 pts',
-    weight: '35 %',
-  },
-  'Trunk Stability': {
-    method: 'Maximum lateral tilt across the pelvis (|left hip Y − right hip Y|) and shoulder girdle (|left shoulder Y − right shoulder Y|) in world coordinates. Either girdle tilting counts equally.',
-    thresholds: '0 cm lateral deviation → 100 pts · 3 cm → ~50 pts · ≥6 cm → 0 pts',
-    weight: '30 %',
-  },
-  'Leg Alignment': {
-    method: 'Expected knee X-position of the stepping leg is interpolated from hip to ankle at the knee\'s vertical depth. Score is based on medial/lateral deviation from that line.',
-    thresholds: '0 cm deviation → 100 pts · 5 cm → ~67 pts · ≥15 cm → 0 pts',
-    weight: '20 %',
-  },
-  'Foot Dorsiflexion': {
-    method: 'Joint angle at the ankle of the stepping leg: knee → ankle → foot-index landmark. A smaller angle means the foot is dorsiflexed (hooked upward), which is required for proper hurdle clearance.',
-    thresholds: '120° (plantarflexed) → 0 pts · 90° (neutral) → 33 pts · 50° (dorsiflexed) → 100 pts',
-    weight: '15 %',
-  },
-}
-
 // ── Module state ──────────────────────────────────────────────
 
 let selectedTest  = 'deep-squat'
-let steppingLeg   = 'left'
 let videoUrl      = null   // object URL — revoked on deactivate
 let analyzeScores = []     // [{ts, result}] for timeupdate score lookup
 let analyzeFrames = []     // [{ts, landmarks}] for skeleton drawing
@@ -127,14 +75,6 @@ function buildUI() {
           ${TESTS.map((t, i) => `
           <button class="toggle-chip ${i === 0 ? 'active' : ''}" data-test="${t.id}">${t.label}</button>`
           ).join('')}
-        </div>
-      </div>
-
-      <div id="fms-leg-row" class="form-row hidden">
-        <label>Stepping Leg</label>
-        <div class="toggle-group" id="fms-leg-toggle">
-          <button class="toggle-chip active" data-leg="left">Left</button>
-          <button class="toggle-chip"        data-leg="right">Right</button>
         </div>
       </div>
 
@@ -213,28 +153,6 @@ function buildUI() {
       <div id="fms-dtw-groups"></div>
     </div>
 
-    <!-- Peak score + criteria (geometric rules — deep squat & hurdle step) -->
-    <div class="card" id="fms-peak-card">
-      <div class="card-title">Peak Score (Geometric Criteria)</div>
-
-      <div style="display:flex;gap:20px;align-items:center;margin-bottom:18px">
-        <div style="text-align:center;min-width:72px">
-          <div style="font-size:56px;font-weight:700;line-height:1" id="fms-peak-num">—</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:2px" id="fms-peak-fms">FMS —</div>
-          <div style="font-size:10px;color:var(--text-muted);margin-top:4px">out of 100</div>
-        </div>
-        <div style="width:1px;background:var(--border);align-self:stretch"></div>
-        <div style="flex:1;font-size:11px;color:var(--text-muted);line-height:1.6">
-          Continuous score mapped to FMS ordinal:<br>
-          <span style="color:#3ecf70;font-weight:600">67–100</span> = FMS 3 (full movement) ·
-          <span style="color:#f59e0b;font-weight:600">34–66</span> = FMS 2 (compensated) ·
-          <span style="color:#ef4444;font-weight:600">1–33</span> = FMS 1 (unable to complete)
-        </div>
-      </div>
-
-      <div id="fms-criteria"></div>
-    </div>
-
     <!-- Score over time -->
     <div class="card">
       <div class="card-title">Score Over Time</div>
@@ -278,16 +196,7 @@ function bindEvents(container) {
       selectedTest = btn.dataset.test
       container.querySelectorAll('[data-test]').forEach(b =>
         b.classList.toggle('active', b.dataset.test === selectedTest))
-      container.querySelector('#fms-leg-row').classList.toggle('hidden', selectedTest !== 'hurdle-step')
       updateReferenceVideo(container)
-    })
-  })
-
-  container.querySelectorAll('[data-leg]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      steppingLeg = btn.dataset.leg
-      container.querySelectorAll('[data-leg]').forEach(b =>
-        b.classList.toggle('active', b.dataset.leg === steppingLeg))
     })
   })
 }
@@ -370,33 +279,18 @@ async function analyze(container) {
     return
   }
 
-  // Geometric per-frame scoring — deep squat & hurdle step only
-  let ruleScores = null, peak = null
-  if (RULE_TESTS.has(selectedTest)) {
-    ruleScores = frames.map(f => {
-      const result = selectedTest === 'deep-squat'
-        ? scoreDeepSquat(f.worldLandmarks)
-        : scoreHurdleStep(f.worldLandmarks, steppingLeg)
-      return { ts: f.timestamp, result }
-    })
-    peak = ruleScores.reduce((best, s) =>
-      s.result.total > best.result.total ? s : best
-    ).result
-  }
-
   // DTW similarity against the gold-standard reference — all tests
   const refData = await loadReferenceLandmarks(refManifest, selectedTest)
   const dtwResult = refData ? scoreAgainstReference(frames, refData, selectedTest) : null
 
-  if (!ruleScores && !dtwResult) {
+  if (!dtwResult) {
     statusEl.textContent =
       'No reference landmarks available for this test — run scripts/extract_reference_landmarks.py first.'
     return
   }
 
-  // Per-frame series used by the chart, video badge, and seek cursor:
-  // geometric score where available, DTW similarity otherwise.
-  const scores = ruleScores ?? dtwResult.perFrame.map(p => ({
+  // Per-frame DTW similarity series — drives the chart, video badge, and seek cursor.
+  const scores = dtwResult.perFrame.map(p => ({
     ts: p.ts,
     result: { total: p.score, fmsEquiv: p.score >= 67 ? 3 : p.score >= 34 ? 2 : p.score >= 1 ? 1 : 0 },
   }))
@@ -405,32 +299,26 @@ async function analyze(container) {
   analyzeFrames = frames.map(f => ({ ts: f.timestamp, landmarks: f.landmarks }))
   analyzeMaxTs  = scores[scores.length - 1].ts
 
-  statusEl.textContent = `${frames.length} frames analyzed` +
-    (dtwResult ? ` · DTW similarity ${dtwResult.total}` : '') +
-    (peak ? ` · peak ${peak.total}` : '')
+  statusEl.textContent = `${frames.length} frames analyzed · DTW similarity ${dtwResult.total}`
 
-  renderResults(container, { scores, peak, dtwResult, trial })
+  renderResults(container, { scores, dtwResult, trial })
 }
 
 // ── Rendering ────────────────────────────────────────────────
 
-function renderResults(container, { scores, peak, dtwResult, trial }) {
+function renderResults(container, { scores, dtwResult, trial }) {
   container.querySelector('#fms-results').style.display = ''
   container.querySelector('#fms-empty').style.display   = 'none'
 
   setupVideo(container, trial)
   renderDTW(container, dtwResult)
 
-  container.querySelector('#fms-peak-card').style.display = peak ? '' : 'none'
-  if (peak) renderPeakScore(container, peak)
-
   drawChart(container, scores)
 
   const chartNote = container.querySelector('#fms-chart-note')
   if (chartNote) {
-    chartNote.textContent = peak
-      ? 'Each point = one recorded frame (geometric score). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
-      : 'Each point = one recorded frame (DTW similarity to the aligned reference frame). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
+    chartNote.textContent =
+      'Each point = one recorded frame (DTW similarity to the aligned reference frame). Dashed lines mark FMS 3 (67) and FMS 2 (34) thresholds. Click to seek the video.'
   }
 }
 
@@ -471,57 +359,6 @@ function renderDTW(container, dtw) {
       <div style="font-size:11px;color:var(--text-muted)">
         Avg deviation from reference: ${g.dev.toFixed(1)}°
       </div>
-    </div>`
-  }).join('')
-}
-
-function renderPeakScore(container, peak) {
-  const color = scoreColor(peak.total)
-  const numEl = container.querySelector('#fms-peak-num')
-  numEl.textContent = peak.total
-  numEl.style.color = color
-
-  const fmsEl = container.querySelector('#fms-peak-fms')
-  fmsEl.textContent = `FMS ${peak.fmsEquiv}`
-  fmsEl.style.color = color
-
-  container.querySelector('#fms-criteria').innerHTML = peak.criteria.map(c => {
-    const col  = scoreColor(c.score)
-    const info = CRITERION_INFO[c.name] ?? {}
-    return `
-    <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-
-      <!-- Name + score + weight -->
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-        <span style="font-size:13px;font-weight:600">${c.name}</span>
-        <span style="display:flex;align-items:baseline;gap:6px">
-          <span style="font-size:11px;color:var(--text-muted)">${info.weight ?? ''}</span>
-          <span style="font-size:14px;color:${col};font-weight:700">${c.score}
-            <span style="font-size:10px;font-weight:400;color:var(--text-muted)">/100</span>
-          </span>
-        </span>
-      </div>
-
-      <!-- Score bar -->
-      <div style="height:7px;border-radius:4px;background:var(--border);overflow:hidden;margin-bottom:6px">
-        <div style="height:100%;width:${c.score}%;background:${col};border-radius:4px;transition:width .2s"></div>
-      </div>
-
-      <!-- Measured value -->
-      <div style="font-size:11px;font-weight:600;color:${col};margin-bottom:4px">
-        Measured: ${c.detail}
-      </div>
-
-      <!-- How it's calculated -->
-      ${info.method ? `
-      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:3px">
-        <strong style="color:var(--text)">How calculated:</strong> ${info.method}
-      </div>
-      <div style="font-size:10.5px;color:var(--text-muted);line-height:1.5">
-        <strong style="color:var(--text)">Thresholds:</strong> ${info.thresholds}
-      </div>` : `
-      <div style="font-size:11px;color:var(--text-muted)">${c.description}</div>`}
-
     </div>`
   }).join('')
 }
