@@ -154,19 +154,42 @@ async function loadSessions(container) {
     allSessions.map(s => `<option value="${s.id}">${s.name}</option>`).join('')
 }
 
+// Rebuild the single- and multi-trial dropdowns for a session (empty when none).
+async function populateTrials(container, id) {
+  const trialSel = container.querySelector('#an-trial-sel')
+  const multiSel = container.querySelector('#an-multi-trial-sel')
+  trialSel.innerHTML = '<option value="">— Select trial —</option>'
+  multiSel.innerHTML = ''
+  if (!id) return
+  const trials = await getTrialsBySession(id)
+  const opts = trials.map(t => `<option value="${t.id}">${t.name} (${t.duration?.toFixed(1) ?? '—'}s)</option>`)
+  trialSel.innerHTML += opts.join('')
+  multiSel.innerHTML  = opts.join('')
+}
+
+// Re-read sessions/trials from the DB, preserving the current selection when it
+// still exists. Called on tab re-activation so newly recorded trials show up.
+export async function refreshAnalysis(container) {
+  const sessionSel = container.querySelector('#an-session-sel')
+  if (!sessionSel) return
+  const prevSession = sessionSel.value
+  const prevTrial   = container.querySelector('#an-trial-sel')?.value
+
+  await loadSessions(container)
+  if (!prevSession || !sessionSel.querySelector(`option[value="${prevSession}"]`)) return
+
+  sessionSel.value = prevSession
+  await populateTrials(container, parseInt(prevSession))
+  const trialSel = container.querySelector('#an-trial-sel')
+  if (prevTrial && trialSel.querySelector(`option[value="${prevTrial}"]`)) trialSel.value = prevTrial
+  container.querySelector('#an-load-btn').disabled = !trialSel.value
+}
+
 function bindEvents(container) {
   container.querySelector('#an-session-sel').addEventListener('change', async (e) => {
     const id = parseInt(e.target.value)
-    const trialSel = container.querySelector('#an-trial-sel')
-    const multiSel = container.querySelector('#an-multi-trial-sel')
-    trialSel.innerHTML = '<option value="">— Select trial —</option>'
-    multiSel.innerHTML = ''
-    if (!id) return
-    const trials = await getTrialsBySession(id)
-    const opts = trials.map(t => `<option value="${t.id}">${t.name} (${t.duration?.toFixed(1) ?? '—'}s)</option>`)
-    trialSel.innerHTML += opts.join('')
-    multiSel.innerHTML  = opts.join('')
-    container.querySelector('#an-load-btn').disabled = false
+    await populateTrials(container, id)
+    container.querySelector('#an-load-btn').disabled = !id
   })
 
   container.querySelector('#an-trial-sel').addEventListener('change', () => {

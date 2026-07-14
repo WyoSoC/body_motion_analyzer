@@ -2,8 +2,8 @@ import { initVision, stopAllCameraStreams } from './utils/mediapipe.js'
 import { getDB } from './db.js'
 import { initCalibration, deactivateCalibration } from './tabs/calibration.js'
 import { initCollection, deactivateCollection } from './tabs/collection.js'
-import { initAnalysis } from './tabs/analysis.js'
-import { initFMS, deactivateFMS } from './tabs/fms.js'
+import { initAnalysis, refreshAnalysis } from './tabs/analysis.js'
+import { initFMS, refreshFMS, deactivateFMS } from './tabs/fms.js'
 
 // ── Status chips ──────────────────────────────────────────────
 
@@ -61,14 +61,24 @@ async function activateTab(tabId) {
     })
   }
 
-  if (tabId === 'analysis' && !initialized.analysis) {
-    initialized.analysis = true
-    await initAnalysis(container)
+  if (tabId === 'analysis') {
+    if (!initialized.analysis) {
+      initialized.analysis = true
+      await initAnalysis(container)
+    } else {
+      // Re-activating: pull in any trials recorded since the last visit.
+      await refreshAnalysis(container)
+    }
   }
 
-  if (tabId === 'fms' && !initialized.fms) {
-    initialized.fms = true
-    await initFMS(container)
+  if (tabId === 'fms') {
+    if (!initialized.fms) {
+      initialized.fms = true
+      await initFMS(container)
+    } else {
+      // Re-activating: pull in any trials recorded since the last visit.
+      await refreshFMS(container)
+    }
   }
 }
 
