@@ -90,7 +90,7 @@ function buildUI() {
     <!-- Reference video for the selected movement test -->
     <div class="card" id="fms-ref-card" style="display:none">
       <div class="card-title">Reference — <span id="fms-ref-name"></span></div>
-      <video id="fms-ref-video" controls loop playsinline preload="metadata"
+      <video id="fms-ref-video" controls loop muted playsinline preload="metadata"
         style="width:100%;display:block;border-radius:6px;background:#000"></video>
       <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
         Gold-standard demonstration of this movement (scores as 100).

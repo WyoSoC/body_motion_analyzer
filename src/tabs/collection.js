@@ -537,9 +537,60 @@ function buildUI() {
       </div>
     </div>
 
+    <!-- Voice control -->
+    <div class="card">
+      <div class="card-title">Voice Control</div>
+
+      <div id="col-voice-state-banner" style="
+        display:flex;align-items:center;gap:10px;
+        padding:10px 14px;border-radius:var(--radius);
+        background:var(--surface2);border:1px solid var(--border);
+        margin-bottom:10px;overflow:hidden">
+        <span id="col-voice-mic" style="font-size:22px;line-height:1;flex-shrink:0">🎙️</span>
+        <div style="flex:1;min-width:0;overflow:hidden">
+          <div id="col-voice-command-hint" style="
+            font-size:12px;font-weight:700;color:var(--text-muted);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            Voice off
+          </div>
+          <div id="col-voice-interim" style="
+            font-size:11px;color:var(--accent);font-style:italic;
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+            height:15px;margin-top:2px">
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="col-voice-toggle" style="flex-shrink:0">Enable</button>
+      </div>
+
+      <div id="col-voice-cmds" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+        <div id="col-cmd-start" style="
+          padding:8px 10px;border-radius:var(--radius);
+          border:1px solid var(--border);background:var(--bg);
+          font-size:11px;opacity:.45">
+          <div style="font-weight:700;color:var(--success);margin-bottom:3px">▶ START</div>
+          <div style="color:var(--text-muted);line-height:1.6">
+            "Begin trial"<br/>"Start trial"<br/>"Begin" / "Start"
+          </div>
+        </div>
+        <div id="col-cmd-stop" style="
+          padding:8px 10px;border-radius:var(--radius);
+          border:1px solid var(--border);background:var(--bg);
+          font-size:11px;opacity:.45">
+          <div style="font-weight:700;color:var(--danger);margin-bottom:3px">■ STOP</div>
+          <div style="color:var(--text-muted);line-height:1.6">
+            "End trial"<br/>"Stop trial"<br/>"End" / "Stop"
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+        Last heard: <span id="col-voice-last" style="color:var(--text);font-style:italic">—</span>
+      </div>
+    </div>
+
   </div>
 
-  <!-- Right 2/3: camera + 3D plot + voice -->
+  <!-- Right 2/3: camera + 3D plot -->
   <div>
 
     <!-- Live camera preview -->
@@ -631,62 +682,11 @@ function buildUI() {
         <select id="col-ref-sel"></select>
       </div>
 
-      <video id="col-ref-video" controls loop playsinline preload="metadata"
+      <video id="col-ref-video" controls loop muted playsinline preload="metadata"
         style="width:100%;display:block;border-radius:6px;background:#000"></video>
 
       <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">
         Gold-standard demonstration — follow along while recording your trial.
-      </div>
-    </div>
-
-    <!-- Voice control -->
-    <div class="card">
-      <div class="card-title">Voice Control</div>
-
-      <div id="col-voice-state-banner" style="
-        display:flex;align-items:center;gap:10px;
-        padding:10px 14px;border-radius:var(--radius);
-        background:var(--surface2);border:1px solid var(--border);
-        margin-bottom:10px;overflow:hidden">
-        <span id="col-voice-mic" style="font-size:22px;line-height:1;flex-shrink:0">🎙️</span>
-        <div style="flex:1;min-width:0;overflow:hidden">
-          <div id="col-voice-command-hint" style="
-            font-size:12px;font-weight:700;color:var(--text-muted);
-            white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            Voice off
-          </div>
-          <div id="col-voice-interim" style="
-            font-size:11px;color:var(--accent);font-style:italic;
-            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-            height:15px;margin-top:2px">
-          </div>
-        </div>
-        <button class="btn btn-ghost btn-sm" id="col-voice-toggle" style="flex-shrink:0">Enable</button>
-      </div>
-
-      <div id="col-voice-cmds" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
-        <div id="col-cmd-start" style="
-          padding:8px 10px;border-radius:var(--radius);
-          border:1px solid var(--border);background:var(--bg);
-          font-size:11px;opacity:.45">
-          <div style="font-weight:700;color:var(--success);margin-bottom:3px">▶ START</div>
-          <div style="color:var(--text-muted);line-height:1.6">
-            "Begin trial"<br/>"Start trial"<br/>"Begin" / "Start"
-          </div>
-        </div>
-        <div id="col-cmd-stop" style="
-          padding:8px 10px;border-radius:var(--radius);
-          border:1px solid var(--border);background:var(--bg);
-          font-size:11px;opacity:.45">
-          <div style="font-weight:700;color:var(--danger);margin-bottom:3px">■ STOP</div>
-          <div style="color:var(--text-muted);line-height:1.6">
-            "End trial"<br/>"Stop trial"<br/>"End" / "Stop"
-          </div>
-        </div>
-      </div>
-
-      <div style="font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-        Last heard: <span id="col-voice-last" style="color:var(--text);font-style:italic">—</span>
       </div>
     </div>
 
