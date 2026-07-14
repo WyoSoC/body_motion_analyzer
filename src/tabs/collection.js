@@ -40,8 +40,8 @@ let _lastResult = null   // latest detectFrame result, read by 3D plot each fram
 let _3dRAF      = null
 let _3dCanvas   = null
 let _3dCtx      = null
-let _3dRotY     = 0.4    // yaw angle (radians), user-adjustable by drag
-let _3dTilt     = -0.45  // pitch angle (radians), user-adjustable by drag
+let _3dRotY     = 0      // yaw angle (radians) — 0 = straight-on; user-adjustable by drag
+let _3dTilt     = 0      // pitch angle (radians) — 0 = straight-on; user-adjustable by drag
 let _3dNow      = 0      // current RAF timestamp, used for pulse animations
 let _3dSmooth   = null   // {cx, cy, cz, scale} — smoothed adaptive viewport
 let _3dRO       = null   // ResizeObserver
@@ -321,14 +321,14 @@ function _init3DPlot(container) {
     }
   }
 
-  // Initial size: overlay ~half the camera's height, 16:9 aspect
+  // Initial size: overlay 1/3 of the camera's width, 16:9 aspect
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (wrap && !wrap.dataset.sized) {
       wrap.dataset.sized = '1'
-      const camH = camWrap?.offsetHeight ?? 0
-      if (camH > 0) {
-        const h = Math.round(camH * 0.5)
-        const w = Math.round(h * 16 / 9)
+      const camW = camWrap?.offsetWidth ?? 0
+      if (camW > 0) {
+        const w = Math.round(camW / 3)
+        const h = Math.round(w * 9 / 16)
         wrap.style.width  = w + 'px'
         wrap.style.height = h + 'px'
         setSize()
@@ -577,7 +577,7 @@ function buildUI() {
 
         <!-- 3D landmark overlay: drag-bar to move, canvas to rotate, corner to resize -->
         <div id="col-3d-wrap" style="
-          position:absolute;top:8px;right:8px;
+          position:absolute;bottom:8px;left:8px;
           min-width:100px;min-height:70px;
           border-radius:8px;overflow:hidden;
           border:1px solid rgba(91,127,255,0.25);
