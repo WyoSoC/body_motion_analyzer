@@ -28,6 +28,8 @@ const POSE_CONN = [
 // ── Module state ──────────────────────────────────────────────
 
 let selectedTest  = 'deep-squat'
+let scoringMode   = 'relative'  // 'relative' (reference = 100) | 'absolute' (perfect = 100)
+let lastTrialId   = null   // trial currently shown, for re-analyze on mode change
 let videoUrl      = null   // object URL — revoked on deactivate
 let analyzeScores = []     // [{ts, result}] for timeupdate score lookup
 let analyzeFrames = []     // [{ts, landmarks}] for skeleton drawing
@@ -76,6 +78,18 @@ function buildUI() {
           ${TESTS.map((t, i) => `
           <button class="toggle-chip ${i === 0 ? 'active' : ''}" data-test="${t.id}">${t.label}</button>`
           ).join('')}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label>Symmetry &amp; Alignment basis</label>
+        <div class="toggle-group" id="fms-mode-toggle">
+          <button class="toggle-chip active" data-mode="relative">Relative (vs reference)</button>
+          <button class="toggle-chip"        data-mode="absolute">Absolute (vs perfect)</button>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px;line-height:1.5">
+          Relative: the gold-standard reference scores 100 (even if imperfect).
+          Absolute: perfect symmetry / zero sway scores 100.
         </div>
       </div>
 
@@ -171,21 +185,14 @@ function buildUI() {
     <!-- Horizontal Symmetry (geometric) -->
     <div class="card" id="fms-sym-card" style="display:none">
       <div class="card-title">Horizontal Symmetry — <span id="fms-sym-score">—</span>/100</div>
-      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px">
-        Left/right symmetry of each body section during the movement. Perfect
-        mirror symmetry scores 100; larger left–right differences lose points.
-      </div>
+      <div id="fms-sym-desc" style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px"></div>
       <div id="fms-sym-groups"></div>
     </div>
 
     <!-- Vertical Alignment (geometric, vs reference) -->
     <div class="card" id="fms-vert-card" style="display:none">
       <div class="card-title">Vertical Alignment — <span id="fms-vert-score">—</span>/100</div>
-      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px">
-        How little each section's markers sway sideways as the body moves up and
-        down — less drift means better core stacking. The gold-standard reference
-        scores 100; drifting more than it loses points.
-      </div>
+      <div id="fms-vert-desc" style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:14px"></div>
       <div id="fms-vert-groups"></div>
     </div>
 
@@ -233,6 +240,17 @@ function bindEvents(container) {
       container.querySelectorAll('[data-test]').forEach(b =>
         b.classList.toggle('active', b.dataset.test === selectedTest))
       updateReferenceVideo(container)
+    })
+  })
+
+  container.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.mode === scoringMode) return
+      scoringMode = btn.dataset.mode
+      container.querySelectorAll('[data-mode]').forEach(b =>
+        b.classList.toggle('active', b.dataset.mode === scoringMode))
+      // Re-score the current trial in place so the switch is immediate.
+      if (lastTrialId) analyze(container)
     })
   })
 }
@@ -323,6 +341,7 @@ async function loadTrials(container, sessionId) {
 async function analyze(container) {
   const trialId = Number(container.querySelector('#fms-trial-sel').value)
   if (!trialId) return
+  lastTrialId = trialId
 
   const statusEl = container.querySelector('#fms-status')
   statusEl.textContent = 'Analyzing…'
@@ -347,7 +366,7 @@ async function analyze(container) {
 
   // Geometric analysis (Horizontal Symmetry + Vertical Alignment) — task-dependent;
   // null for tests without a geometric config (they stay Form/DTW-only).
-  const geoResult = scoreGeometric(frames, refData, selectedTest)
+  const geoResult = scoreGeometric(frames, refData, selectedTest, scoringMode)
 
   // Combined final score: equal thirds of Form + Symmetry + Vertical when
   // geometric analysis is available, otherwise the Form score alone.
@@ -440,6 +459,14 @@ function renderGeometric(container, geo) {
   if (!geo) { symCard.style.display = 'none'; vertCard.style.display = 'none'; return }
   symCard.style.display  = ''
   vertCard.style.display = ''
+
+  const rel = geo.mode === 'relative'
+  container.querySelector('#fms-sym-desc').textContent = rel
+    ? 'Left/right symmetry of each body section, scored relative to the gold-standard reference — matching the reference’s symmetry scores 100.'
+    : 'Left/right symmetry of each body section. Perfect mirror symmetry scores 100; larger left–right differences lose points.'
+  container.querySelector('#fms-vert-desc').textContent = rel
+    ? 'How little each section’s markers sway sideways as the body moves up and down. The gold-standard reference scores 100; drifting more than it loses points.'
+    : 'How little each section’s markers sway sideways as the body moves up and down. Zero sway (perfect vertical travel) scores 100; more drift loses points.'
 
   container.querySelector('#fms-sym-score').textContent  = geo.symmetry.score
   container.querySelector('#fms-vert-score').textContent = geo.vertical.score
