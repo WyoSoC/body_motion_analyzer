@@ -1,5 +1,6 @@
 import { initVision, stopAllCameraStreams } from './utils/mediapipe.js'
 import { getDB } from './db.js'
+import { initAbout } from './tabs/about.js'
 import { initCalibration, deactivateCalibration } from './tabs/calibration.js'
 import { initCollection, deactivateCollection } from './tabs/collection.js'
 import { initAnalysis, refreshAnalysis } from './tabs/analysis.js'
@@ -21,7 +22,7 @@ function setChip(el, label, cls) {
 const tabBtns     = document.querySelectorAll('.tab-btn')
 const tabContents = document.querySelectorAll('.tab-content')
 
-let initialized  = { calibration: false, collection: false, analysis: false, fms: false }
+let initialized  = { about: false, calibration: false, collection: false, analysis: false, fms: false }
 let activeTabId  = null
 
 async function activateTab(tabId) {
@@ -39,6 +40,11 @@ async function activateTab(tabId) {
   tabContents.forEach(t => t.classList.toggle('active', t.id === `tab-${tabId}`))
 
   const container = document.getElementById(`tab-${tabId}`)
+
+  if (tabId === 'about' && !initialized.about) {
+    initialized.about = true
+    initAbout(container, { onLaunch: () => activateTab('collection') })
+  }
 
   if (tabId === 'calibration' && !initialized.calibration) {
     initialized.calibration = true
@@ -101,8 +107,8 @@ async function bootstrap() {
     console.error('[MediaPipe] init failed:', err)
   }
 
-  // Open directly on Data Collection; calibration is an optional step.
-  await activateTab('collection')
+  // Land on the About page; its Launch button jumps to Data Collection.
+  await activateTab('about')
 }
 
 bootstrap()

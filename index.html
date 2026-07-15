@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Body Motion Analyzer</title>
+  <title>Kinesiology Markerless Motion Capture &amp; Analysis</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
   <div id="app">
     <header class="app-header">
       <div class="header-left">
-        <h1 class="app-title">Kinesiology Body Motion Analyzer</h1>
+        <h1 class="app-title">Kinesiology Markerless Motion Capture &amp; Analysis</h1>
         <span class="app-subtitle">MediaPipe Markerless Motion Analysis (<a href="https://www.uwyo.edu/kandh/labs/perception-action-cerebral-executive-lab.html" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;text-underline-offset:2px">PACE Lab, University of Wyoming</a>)</span>
       </div>
       <div class="header-right">
@@ -23,11 +23,15 @@
     </header>
 
     <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="about">
+        <span class="tab-num">0</span>
+        <span class="tab-label">About</span>
+      </button>
       <button class="tab-btn" data-tab="calibration">
         <span class="tab-num">1</span>
         <span class="tab-label">Calibration (optional)</span>
       </button>
-      <button class="tab-btn active" data-tab="collection">
+      <button class="tab-btn" data-tab="collection">
         <span class="tab-num">2</span>
         <span class="tab-label">Data Collection</span>
       </button>
@@ -42,8 +46,9 @@
     </nav>
 
     <main class="tab-container">
+      <section id="tab-about" class="tab-content active"></section>
       <section id="tab-calibration" class="tab-content"></section>
-      <section id="tab-collection" class="tab-content active"></section>
+      <section id="tab-collection" class="tab-content"></section>
       <section id="tab-analysis" class="tab-content"></section>
       <section id="tab-fms" class="tab-content"></section>
     </main>
