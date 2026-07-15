@@ -101,7 +101,8 @@ async function bootstrap() {
     console.error('[MediaPipe] init failed:', err)
   }
 
-  await activateTab('calibration')
+  // Open directly on Data Collection; calibration is an optional step.
+  await activateTab('collection')
 }
 
 bootstrap()
