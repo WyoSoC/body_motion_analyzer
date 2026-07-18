@@ -2,8 +2,8 @@
 // (fms_dtw.js) with two additional categories:
 //
 //   Horizontal Symmetry — how closely the left side mirrors the right during
-//     the movement. Self-contained: perfect L/R symmetry (0° difference) = 100.
-//     No reference video needed.
+//     the movement, scored from the Symmetry Index (SI) of bilateral joint
+//     pairs at peak flexion. Perfect L/R symmetry (SI 0 %) = 100.
 //
 //   Vertical Alignment — how little each body section's markers drift
 //     horizontally (sway) as the body moves up/down. Less drift = better core
@@ -16,18 +16,7 @@
 
 import { FEATURES } from './fms_dtw.js'
 
-// ── Metric builders (return a per-frame degrees value) ────────────
 // A frame L is a 33-length array of {x, y, z} world landmarks (metres).
-
-// Left/right angular discrepancy between two homologous joint angles.
-function pairDiff(a, b) {
-  return L => Math.abs(FEATURES[a](L) - FEATURES[b](L))
-}
-
-// Deviation from level (0°) — used for midline/trunk asymmetry (lateral tilt).
-function offLevel(a) {
-  return L => Math.abs(FEATURES[a](L))
-}
 
 // ── Bilateral symmetry metrics ────────────────────────────────────
 
@@ -61,11 +50,15 @@ function trunkDeviation(L) {
 export const GEO_TESTS = {
   'deep-squat': {
     diagnostics: true,  // emit SI/SA/trunk phase diagnostics
+    // Every section is scored from the Symmetry Index of bilateral pairs at
+    // peak flexion. Trunk uses per-side torso lean (no single L/R joint); the
+    // ankle is excluded from Lower (foot-index landmarks too noisy).
+    // Note: per-side torso incline carries a systematic L/R offset from camera
+    // angle, so Trunk is meaningful in 'relative' mode (the offset is subtracted
+    // against the reference) and reads pessimistically in 'absolute' mode.
     symmetry: [
-      { name: 'Upper Body', metrics: [pairDiff('shoulderL', 'shoulderR'), pairDiff('elbowL', 'elbowR')] },
-      { name: 'Trunk',      metrics: [offLevel('pelvisTilt'), offLevel('shoulderTilt')] },
-      // Lower symmetry is scored from the Symmetry Index of the reliable hip and
-      // knee joints at peak flexion (ankle excluded — foot-index too noisy).
+      { name: 'Upper Body', siJoints: [['shoulderL', 'shoulderR'], ['elbowL', 'elbowR']] },
+      { name: 'Trunk',      siJoints: [['torsoInclineL', 'torsoInclineR']] },
       { name: 'Lower Body', siJoints: [['hipL', 'hipR'], ['kneeL', 'kneeR']] },
     ],
     vertical: [
@@ -78,9 +71,7 @@ export const GEO_TESTS = {
 
 // ── Scoring maps (tunable) ────────────────────────────────────────
 
-// Average L/R angular difference (deg) that maps to a symmetry score of 0.
-const SYM_FLOOR = 45
-// Symmetry Index (%) at peak flexion that maps to a Lower-body score of 0.
+// Symmetry Index (%) at peak flexion that maps to a symmetry score of 0.
 const SI_FLOOR = 20
 // ABSOLUTE vertical alignment: total horizontal drift (metres) that maps to 0.
 const DRIFT_FLOOR_ABS = 0.30
@@ -89,15 +80,7 @@ const DRIFT_FLOOR = 0.12
 
 function clamp100(s) { return Math.max(0, Math.min(100, Math.round(s))) }
 
-// Symmetry from a per-frame-averaged L/R discrepancy (degrees). In 'relative'
-// mode the reference's own discrepancy is subtracted first, so a trial as
-// symmetric as the gold standard scores 100.
-function symScore(userDev, refDev, mode) {
-  const dev = mode === 'relative' ? Math.max(0, userDev - refDev) : userDev
-  return clamp100(100 - dev * (100 / SYM_FLOOR))
-}
-
-// Lower-body symmetry from Symmetry Index (%). 'relative' subtracts the
+// Section symmetry from Symmetry Index (%). 'relative' subtracts the
 // reference's own SI so a trial as symmetric as the gold standard scores 100.
 function siScore(userSI, refSI, mode) {
   const si = mode === 'relative' ? Math.max(0, userSI - refSI) : userSI
@@ -114,13 +97,6 @@ function vertScore(userDrift, refDrift, mode) {
 
 function meanScore(sections) {
   return Math.round(sections.reduce((s, x) => s + x.score, 0) / sections.length)
-}
-
-// Mean over all frames of a section's per-frame metric values (degrees).
-function avgMetrics(frames, metrics) {
-  let sum = 0, cnt = 0
-  for (const L of frames) for (const metric of metrics) { sum += metric(L); cnt++ }
-  return cnt ? sum / cnt : 0
 }
 
 // RMS horizontal (x–z plane) distance of each section marker from its own mean
@@ -159,8 +135,8 @@ function detectSquatPhases(frames) {
   return { bottomIdx, descent: [0, bottomIdx], ascent: [bottomIdx, n - 1] }
 }
 
-// SI at the peak-flexion frame for a hip+knee pair set — the value that feeds
-// the Lower-body symmetry score. Averaged across the supplied joint pairs.
+// Mean Symmetry Index at the peak-flexion frame across the supplied bilateral
+// pairs — the value that feeds a section's symmetry score.
 function bottomSI(frames, bottomIdx, pairs) {
   const L = frames[bottomIdx]
   let sum = 0
@@ -240,17 +216,12 @@ export function scoreGeometric(userFrames, refData, testId, mode = 'relative') {
   const userBottom = detectSquatPhases(userLm).bottomIdx
   const refBottom  = detectSquatPhases(refLm).bottomIdx
 
-  // Horizontal Symmetry — angular-discrepancy sections, or SI-based sections
-  // (siJoints) scored from the Symmetry Index at peak flexion.
+  // Horizontal Symmetry — each section scored from the Symmetry Index of its
+  // bilateral pairs at peak flexion.
   const symSections = config.symmetry.map(sec => {
-    if (sec.siJoints) {
-      const userSI = bottomSI(userLm, userBottom, sec.siJoints)
-      const refSI  = bottomSI(refLm,  refBottom,  sec.siJoints)
-      return { name: sec.name, score: siScore(userSI, refSI, mode) }
-    }
-    const userDev = avgMetrics(userLm, sec.metrics)
-    const refDev  = avgMetrics(refLm,  sec.metrics)
-    return { name: sec.name, score: symScore(userDev, refDev, mode) }
+    const userSI = bottomSI(userLm, userBottom, sec.siJoints)
+    const refSI  = bottomSI(refLm,  refBottom,  sec.siJoints)
+    return { name: sec.name, score: siScore(userSI, refSI, mode) }
   })
 
   // Vertical Alignment — horizontal drift, absolute or relative to the reference.

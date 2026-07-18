@@ -63,6 +63,10 @@ export const FEATURES = {
   trunkIncline: L => inclineDeg(mid(L[23], L[24]), mid(L[11], L[12])),
   pelvisTilt:   L => tiltDeg(L[23], L[24]),
   shoulderTilt: L => tiltDeg(L[11], L[12]),
+  // Per-side torso lean (hip → shoulder incline from vertical) — a bilateral
+  // pair for trunk symmetry (asymmetric lateral lean/rotation splits the two).
+  torsoInclineL: L => inclineDeg(L[23], L[11]),
+  torsoInclineR: L => inclineDeg(L[24], L[12]),
 }
 
 // Left/right feature swaps for mirrored scoring.
