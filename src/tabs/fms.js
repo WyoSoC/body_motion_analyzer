@@ -196,6 +196,21 @@ function buildUI() {
       <div id="fms-vert-groups"></div>
     </div>
 
+    <!-- Squat symmetry diagnostics (deep squat only) -->
+    <div class="card" id="fms-squat-diag-card" style="display:none">
+      <div class="card-title">Squat Symmetry Diagnostics</div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.6;margin-bottom:12px">
+        Left/right <strong>Symmetry Index (SI)</strong> and <strong>Symmetry
+        Angle (SA)</strong> per joint — 0&nbsp;% is perfect symmetry, &gt;5&nbsp;%
+        at the bottom often flags a hip-mobility or ankle-dorsiflexion deficit on
+        one side. Columns are the squat phases; <em>Bottom</em> is the frame of
+        peak knee flexion. Trunk deviation is the peak lateral drift of the
+        shoulders off the pelvis midline (a sudden ascent shift suggests a
+        hip-hike compensation).
+      </div>
+      <div id="fms-squat-diag-body"></div>
+    </div>
+
     <!-- Score over time -->
     <div class="card">
       <div class="card-title">Score Over Time</div>
@@ -401,6 +416,7 @@ function renderResults(container, { scores, dtwResult, geoResult, finalScore, fi
   renderOverall(container, { dtwResult, geoResult, finalScore, finalFms })
   renderDTW(container, dtwResult)
   renderGeometric(container, geoResult)
+  renderSquatDiagnostics(container, geoResult?.diagnostics ?? null)
 
   drawChart(container, scores)
 
@@ -472,6 +488,55 @@ function renderGeometric(container, geo) {
   container.querySelector('#fms-vert-score').textContent = geo.vertical.score
   container.querySelector('#fms-sym-groups').innerHTML  = geo.symmetry.sections.map(sectionBar).join('')
   container.querySelector('#fms-vert-groups').innerHTML = geo.vertical.sections.map(sectionBar).join('')
+}
+
+// Color for a Symmetry Index / Angle value (%): lower is better.
+function siColor(pct) {
+  return pct < 5 ? '#3ecf70' : pct <= 10 ? '#f59e0b' : '#ef4444'
+}
+
+// Squat SI/SA per joint across Descent / Bottom / Ascent, plus trunk deviation.
+function renderSquatDiagnostics(container, diag) {
+  const card = container.querySelector('#fms-squat-diag-card')
+  if (!diag) { card.style.display = 'none'; return }
+  card.style.display = ''
+
+  const th = t => `<th style="text-align:right;padding:5px 8px;font-weight:600;color:var(--text-muted)">${t}</th>`
+  // One cell showing SI% (colored) with SA% underneath.
+  const cell = p => `
+    <td style="text-align:right;padding:5px 8px">
+      <span style="font-weight:700;color:${siColor(p.si)}">${p.si.toFixed(1)}%</span>
+      <span style="display:block;font-size:9.5px;color:var(--text-muted)">SA ${p.sa.toFixed(1)}%</span>
+    </td>`
+
+  const jointRows = diag.joints.map(j => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:5px 8px;font-weight:600">${j.name}${j.lowConfidence
+        ? ' <span style="font-size:9px;color:var(--text-muted);font-weight:400">(low conf.)</span>' : ''}</td>
+      ${cell(j.descent)}${cell(j.bottom)}${cell(j.ascent)}
+    </tr>`).join('')
+
+  // Trunk deviation row (cm): peak lateral drift per phase, magnitude-colored.
+  const cm = v => {
+    const a = Math.abs(v)
+    const col = a < 4 ? '#3ecf70' : a <= 7 ? '#f59e0b' : '#ef4444'
+    return `<td style="text-align:right;padding:5px 8px;font-weight:700;color:${col}">${v.toFixed(1)} cm</td>`
+  }
+
+  container.querySelector('#fms-squat-diag-body').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr>
+        <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted)">Joint (L/R)</th>
+        ${th('Descent')}${th('Bottom')}${th('Ascent')}
+      </tr></thead>
+      <tbody>
+        ${jointRows}
+        <tr style="border-top:2px solid var(--border)">
+          <td style="padding:5px 8px;font-weight:600">Trunk Deviation</td>
+          ${cm(diag.trunk.descentPeakCm)}${cm(diag.trunk.bottomCm)}${cm(diag.trunk.ascentPeakCm)}
+        </tr>
+      </tbody>
+    </table>`
 }
 
 function renderDTW(container, dtw) {
