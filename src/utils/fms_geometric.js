@@ -135,13 +135,21 @@ function detectSquatPhases(frames) {
   return { bottomIdx, descent: [0, bottomIdx], ascent: [bottomIdx, n - 1] }
 }
 
-// Mean Symmetry Index at the peak-flexion frame across the supplied bilateral
-// pairs — the value that feeds a section's symmetry score.
-function bottomSI(frames, bottomIdx, pairs) {
-  const L = frames[bottomIdx]
-  let sum = 0
-  for (const [a, b] of pairs) sum += symmetryIndex(FEATURES[a](L), FEATURES[b](L))
-  return sum / pairs.length
+// Mean Symmetry Index over a window centred on peak flexion, across the supplied
+// bilateral pairs — the value that feeds a section's symmetry score. Averaging a
+// window (rather than the single bottom frame) is essential: the bottom of a
+// deep squat is the worst-tracked moment (max self-occlusion), so a lone glitchy
+// frame would otherwise spike the SI and crash the score.
+function windowSI(frames, bottomIdx, pairs) {
+  const half = Math.max(2, Math.round(frames.length * 0.08))
+  const i0 = Math.max(0, bottomIdx - half)
+  const i1 = Math.min(frames.length - 1, bottomIdx + half)
+  let sum = 0, n = 0
+  for (let i = i0; i <= i1; i++) {
+    const L = frames[i]
+    for (const [a, b] of pairs) { sum += symmetryIndex(FEATURES[a](L), FEATURES[b](L)); n++ }
+  }
+  return n ? sum / n : 0
 }
 
 const DIAG_JOINTS = [
@@ -217,10 +225,10 @@ export function scoreGeometric(userFrames, refData, testId, mode = 'relative') {
   const refBottom  = detectSquatPhases(refLm).bottomIdx
 
   // Horizontal Symmetry — each section scored from the Symmetry Index of its
-  // bilateral pairs at peak flexion.
+  // bilateral pairs, averaged over a window around peak flexion.
   const symSections = config.symmetry.map(sec => {
-    const userSI = bottomSI(userLm, userBottom, sec.siJoints)
-    const refSI  = bottomSI(refLm,  refBottom,  sec.siJoints)
+    const userSI = windowSI(userLm, userBottom, sec.siJoints)
+    const refSI  = windowSI(refLm,  refBottom,  sec.siJoints)
     return { name: sec.name, score: siScore(userSI, refSI, mode) }
   })
 
