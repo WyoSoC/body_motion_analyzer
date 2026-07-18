@@ -1,7 +1,7 @@
 import { listCameras, listCamerasAfterPermission, openCamera, stopCamera, loadModel, detectFrame, drawResults } from '../utils/mediapipe.js'
 import { VoiceController } from '../utils/voice.js'
 import { loadReferenceManifest, segmentUrl } from '../utils/reference.js'
-import { getAllCalibrations, saveSession, getAllSessions, saveTrial, updateTrial, getTrialsBySession, getAllSessions as _gas, deleteSession, deleteTrial, downloadBlob, exportTrialCSV, getSession } from '../db.js'
+import { getAllCalibrations, saveSession, getAllSessions, saveTrial, updateTrial, getTrialsBySession, getAllSessions as _gas, deleteSession, deleteTrial, downloadBlob, exportTrialCSV, getSession, updateSession } from '../db.js'
 
 // ── Core state ────────────────────────────────────────────────
 
@@ -465,6 +465,7 @@ function buildUI() {
         </div>
         <div class="btn-group mb-12">
           <button class="btn btn-ghost btn-sm" id="col-new-session">+ New Session</button>
+          <button class="btn btn-ghost btn-sm" id="col-rename-session" disabled>✎ Rename</button>
           <button class="btn btn-ghost btn-sm" id="col-del-session" disabled>✕ Delete Session</button>
         </div>
       </div>
@@ -765,6 +766,7 @@ function bindEvents(container) {
     container.querySelector('#col-new-session-form').classList.add('hidden')
   })
   container.querySelector('#col-create-session').addEventListener('click', () => createSession(container))
+  container.querySelector('#col-rename-session').addEventListener('click', () => renameCurrentSession(container))
   container.querySelector('#col-del-session').addEventListener('click',    () => deleteCurrentSession(container))
   container.querySelector('#col-session-sel').addEventListener('change',   (e) => selectSession(container, parseInt(e.target.value)))
 
@@ -1096,8 +1098,14 @@ async function createSession(container) {
 }
 
 async function selectSession(container, id) {
-  if (!id) { currentSession = null; return }
+  if (!id) {
+    currentSession = null
+    container.querySelector('#col-rename-session').disabled = true
+    container.querySelector('#col-del-session').disabled    = true
+    return
+  }
   currentSession = sessions.find(s => s.id === id) ?? await getSession(id)
+  container.querySelector('#col-rename-session').disabled = false
   container.querySelector('#col-del-session').disabled    = false
   container.querySelector('#col-start-trial').disabled    = !videoEl.srcObject
   container.querySelector('#col-export-session').disabled = false
@@ -1114,9 +1122,21 @@ async function deleteCurrentSession(container) {
   currentTrials  = []
   await refreshSelects(container)
   renderTrialList(container)
+  container.querySelector('#col-rename-session').disabled = true
   container.querySelector('#col-del-session').disabled    = true
   container.querySelector('#col-start-trial').disabled    = true
   container.querySelector('#col-export-session').disabled = true
+}
+
+async function renameCurrentSession(container) {
+  if (!currentSession) return
+  const name = prompt('Rename session:', currentSession.name)?.trim()
+  if (!name || name === currentSession.name) return
+  currentSession = { ...currentSession, name }
+  await updateSession(currentSession)
+  await refreshSelects(container)
+  container.querySelector('#col-session-sel').value = currentSession.id
+  setStatus(container, `Session renamed to "${name}".`)
 }
 
 // ── Trial recording ───────────────────────────────────────────
@@ -1242,6 +1262,8 @@ function renderTrialList(container) {
               ${hasLm ? '' : 'disabled'} style="font-size:14px;padding:2px 5px">📊</button>
       <button class="btn btn-ghost btn-sm dl-vid" data-id="${t.id}" title="Download Video"
               ${hasVideo ? '' : 'disabled'} style="font-size:14px;padding:2px 5px">🎬</button>
+      <button class="btn btn-ghost btn-sm rename-trial" data-id="${t.id}" title="Rename trial"
+              style="font-size:14px;padding:2px 5px">✎</button>
       <button class="btn btn-ghost btn-sm del-trial" data-id="${t.id}" title="Delete trial">✕</button>
     </div>`
   }).join('')
@@ -1274,10 +1296,25 @@ function renderTrialList(container) {
     })
   })
 
+  listEl.querySelectorAll('.rename-trial').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation()
+      const trial = currentTrials.find(t => t.id === parseInt(btn.dataset.id))
+      if (!trial) return
+      const name = prompt('Rename trial:', trial.name)?.trim()
+      if (!name || name === trial.name) return
+      await updateTrial({ ...trial, name })
+      currentTrials = await getTrialsBySession(currentSession.id)
+      renderTrialList(container)
+    })
+  })
+
   listEl.querySelectorAll('.del-trial').forEach(btn => {
     btn.addEventListener('click', async e => {
       e.stopPropagation()
       const id = parseInt(btn.dataset.id)
+      const trial = currentTrials.find(t => t.id === id)
+      if (!confirm(`Delete trial "${trial?.name ?? ''}"?`)) return
       await deleteTrial(id)
       if (selectedTrialId === id) selectedTrialId = null
       currentTrials = await getTrialsBySession(currentSession.id)

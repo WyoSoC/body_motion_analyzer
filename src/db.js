@@ -67,6 +67,11 @@ export async function getSession(id) {
   return db.get('sessions', id)
 }
 
+export async function updateSession(session) {
+  const db = await getDB()
+  return db.put('sessions', session)
+}
+
 export async function deleteSession(id) {
   const db = await getDB()
   // Delete all trials in session
