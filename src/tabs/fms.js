@@ -383,10 +383,11 @@ async function analyze(container) {
   // null for tests without a geometric config (they stay Form/DTW-only).
   const geoResult = scoreGeometric(frames, refData, selectedTest, scoringMode)
 
-  // Combined final score: equal thirds of Form + Symmetry + Vertical when
-  // geometric analysis is available, otherwise the Form score alone.
+  // Combined geometric score: equal halves of Horizontal Symmetry + Vertical
+  // Alignment. Form/DTW is reported separately and is NOT folded in. Falls back
+  // to the Form score for tests without geometric analysis.
   const finalScore = geoResult
-    ? Math.round((dtwResult.total + geoResult.symmetry.score + geoResult.vertical.score) / 3)
+    ? Math.round((geoResult.symmetry.score + geoResult.vertical.score) / 2)
     : dtwResult.total
   const finalFms = finalScore >= 67 ? 3 : finalScore >= 34 ? 2 : finalScore >= 1 ? 1 : 0
 
@@ -400,8 +401,9 @@ async function analyze(container) {
   analyzeFrames = frames.map(f => ({ ts: f.timestamp, landmarks: f.landmarks }))
   analyzeMaxTs  = scores[scores.length - 1].ts
 
-  statusEl.textContent = `${frames.length} frames analyzed · overall ${finalScore}` +
-    (geoResult ? ` (form ${dtwResult.total} · sym ${geoResult.symmetry.score} · vert ${geoResult.vertical.score})` : '')
+  statusEl.textContent = geoResult
+    ? `${frames.length} frames analyzed · overall ${finalScore} (sym ${geoResult.symmetry.score} · vert ${geoResult.vertical.score}) · form ${dtwResult.total}`
+    : `${frames.length} frames analyzed · form ${dtwResult.total}`
 
   renderResults(container, { scores, dtwResult, geoResult, finalScore, finalFms, trial })
 }
@@ -445,10 +447,11 @@ function renderOverall(container, { dtwResult, geoResult, finalScore, finalFms }
   const chip = (label, s) =>
     `<span style="color:${scoreColor(s)};font-weight:600">${label} ${s}</span>`
   container.querySelector('#fms-overall-breakdown').innerHTML =
-    'Equal-weighted average of three categories:<br>' +
-    [chip('Form', dtwResult.total),
-     chip('Symmetry', geoResult.symmetry.score),
-     chip('Vertical', geoResult.vertical.score)].join(' · ')
+    'Equal-weighted average of Horizontal Symmetry and Vertical Alignment:<br>' +
+    [chip('Symmetry', geoResult.symmetry.score),
+     chip('Vertical', geoResult.vertical.score)].join(' · ') +
+    `<br><span style="color:var(--text-muted)">Form similarity (DTW) is reported
+     separately: <span style="color:${scoreColor(dtwResult.total)};font-weight:600">${dtwResult.total}</span></span>`
 }
 
 // A single labelled section bar for the geometric category cards.
